@@ -1,9 +1,9 @@
 # NexTalk
 
 [![CI](https://github.com/erfanheydarzade/NexTalk/actions/workflows/ci.yml/badge.svg)](https://github.com/erfanheydarzade/NexTalk/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/erfanheydarzade/NexTalk.svg)](https://pkg.go.dev/github.com/erfanheydarzade/NexTalk)
 [![Go Version](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/erfanheydarzade/NexTalk)](https://github.com/erfanheydarzade/NexTalk/releases)
 
 > A hybrid post-quantum cryptographic messaging protocol runtime, written in Go.
 
