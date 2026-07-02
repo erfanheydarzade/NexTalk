@@ -10,9 +10,9 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		ProxyURL:  getEnv("NEX_PROXY_URL", "http://localhost:8080"),
-		WorkerURL: getEnv("NEX_WORKER_URL", ""),
-		DebugMode: getEnv("NEX_DEBUG", "false") == "true",
+		ProxyURL:  getEnv("PROXY_URL", "http://localhost:8080"),
+		WorkerURL: getEnv("WORKER_URL", ""),
+		DebugMode: getEnv("DEBUG", "false") == "true",
 	}
 }
 

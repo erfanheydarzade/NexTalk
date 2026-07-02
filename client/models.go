@@ -24,7 +24,7 @@ type HandshakeAnswer struct {
 	KyberCiphertext []byte `json:"kyberCiphertext"`
 	DilithiumPub    []byte `json:"dilithiumPub"`
 	Sign            []byte `json:"sign"`
-	DilithiumSign   []byte `json:"dilithiumSign"` // ← جدید
+	DilithiumSign   []byte `json:"dilithiumSign"`
 }
 type Response struct {
 	Status  string      `json:"status"`

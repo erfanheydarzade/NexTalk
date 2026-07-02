@@ -44,7 +44,6 @@ func (c *Client) Decrypt(payloadBytes []byte) (string, []byte, error) {
 // NewClient creates a fresh cryptographic identity.
 //
 // ID = hex(Ed25519Public) + sha3_256(DilithiumPublic)
-// هر دو کلید long-term هستن و در Client ذخیره می‌شن.
 func NewClient() *Client {
 	pubEd, privEd, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -74,9 +73,6 @@ func SaveClient(cl *Client) {
 }
 
 // NewSecurePeer initializes a new secure session state for a peer.
-//
-// Dilithium keys از Client می‌گیره (long-term) نه اینکه هر بار جدید بسازه —
-// چون ID peer به همون کلیدهای ثابت بسته‌ست.
 func NewSecurePeer(expectedPeerHash []byte, idPriv ed25519.PrivateKey, idPub ed25519.PublicKey, dilPriv, dilPub []byte) *crypto.SecurePeer {
 	privX, pubX := crypto.GenerateX25519KeyPair()
 	dhPrivX, dhPubX := crypto.GenerateX25519KeyPair()
@@ -100,11 +96,11 @@ func NewSecurePeer(expectedPeerHash []byte, idPriv ed25519.PrivateKey, idPub ed2
 		IdentityPublic:   idPub,
 		Private:          privX,
 		Public:           pubX,
-		PqcPrivateKey:    pqcPrivBytes, // Kyber768 — هر session جدید
+		PqcPrivateKey:    pqcPrivBytes,
 		PqcPublicKey:     pqcPubBytes,
 		DhPrivate:        dhPrivX,
 		DhPublic:         dhPubX,
-		PqcSignPrivate:   dilPriv, // ← از Client می‌گیره، ثابت
+		PqcSignPrivate:   dilPriv,
 		PqcSignPublic:    dilPub,
 		SkippedMessages:  make(map[string][]byte),
 		SeenOffers:       make(map[string]bool),
