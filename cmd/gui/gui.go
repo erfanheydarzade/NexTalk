@@ -407,7 +407,7 @@ func (t *WorkerTransport) Help() {
 	fmt.Println("  send <peer> <msg>     - Encrypt and dispatch message")
 	fmt.Println("  mailbox               - List all active chats/mailboxes")
 	fmt.Println("  mailbox <peer>        - Read messages from a specific peer")
-	fmt.Println("  switch / exit         - Return to main menu\n")
+	fmt.Println("  switch / exit         - Return to main menu")
 }
 
 // ---------------------------------------------------------
