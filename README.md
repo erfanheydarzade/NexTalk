@@ -25,7 +25,7 @@ cmd/
   offline/          → Cobra subcommands: init, offer, accept, finish, encrypt, decrypt, run
   worker/           → Worker transport subcommand + registration
   proxy/            → Proxy transport subcommand + registration
-  gui/              → TUI shell launcher
+  shell/              → shell launcher
 
 core/               → Protocol engine: handshake orchestration, session management
 crypto/             → Cryptographic primitives: keys, ratchet, AEAD, HKDF
@@ -344,13 +344,13 @@ MSG=$(./nextalk offline encrypt -i "$ALICE" -r "$BOB" -m "hello world")
 
 ---
 
-## CLI Usage — TUI / GUI Mode
+## CLI Usage — Shell Mode
 
 ```bash
-./nextalk gui
+./nextalk shell
 ```
 
-Launches the full TUI transport selector:
+Launches the full shell transport selector:
 
 ```
 ╔════════════════════════════════════════╗
@@ -463,10 +463,10 @@ PROXY_URL=https://your-s3-relay-endpoint
 
 - **Not production-audited** — research and experimentation only
 - No multi-device identity synchronization
-- No persistent mailbox indexing per peer (in-memory only during TUI session)
+- No persistent mailbox indexing per peer (in-memory only during shell session)
 - Transport-layer replay hardening is incomplete
 - No formal protocol specification
-- Session inspection tooling in TUI is minimal
+- Session inspection tooling in shell is minimal
 
 Planned:
 - Formal protocol spec (RFC-style)
@@ -483,7 +483,7 @@ NexTalk cleanly separates four concerns:
 1. **Cryptography** (`crypto/`) — primitives only, no protocol decisions
 2. **Protocol** (`core/`) — handshake and session logic, no transport assumptions
 3. **Transport** (`transport/`) — untrusted relay, no knowledge of payload semantics
-4. **Runtime** (`cmd/`) — CLI/TUI orchestration, no cryptographic decisions
+4. **Runtime** (`cmd/`) — shell orchestration, no cryptographic decisions
 
 Each layer is independently auditable and testable. The offline CLI exists precisely to make the protocol layer testable without any transport dependency.
 

@@ -1,4 +1,4 @@
-package gui
+package shell
 
 import (
 	"bufio"

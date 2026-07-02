@@ -46,7 +46,7 @@ type SenderAuth struct {
 // recipientPubKey is the raw 32-byte Ed25519 public key of the recipient.
 //
 // This is the ONE place this signing scheme is implemented. Every caller
-// (cmd/worker.go's CLI commands, gui.go's WorkerTransport, anything future)
+// (cmd/worker.go's CLI commands, shell.go's WorkerTransport, anything future)
 // should call this instead of reimplementing the signed-message format —
 // that reimplementation is exactly how the CLI and GUI drifted out of sync
 // before (the GUI's transport.Client.Send never got sender auth added at

@@ -1,4 +1,4 @@
-package gui
+package shell
 
 import (
 	"github.com/erfanheydarzade/NexTalk/core"
@@ -9,7 +9,7 @@ import (
 func Register(parent *cobra.Command, engine *core.Engine) {
 	cfg := config.Load()
 	cmd := &cobra.Command{
-		Use:   "gui",
+		Use:   "shell",
 		Short: "Start NexTalk GUI mode",
 		Run: func(cmd *cobra.Command, args []string) {
 			RunGUI(engine, cfg)

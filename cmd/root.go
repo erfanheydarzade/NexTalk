@@ -2,9 +2,9 @@ package cmd
 
 import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
-	cmdgui "github.com/erfanheydarzade/NexTalk/cmd/gui"
 	cmdoffline "github.com/erfanheydarzade/NexTalk/cmd/offline"
 	cmdproxy "github.com/erfanheydarzade/NexTalk/cmd/proxy"
+	cmdgui "github.com/erfanheydarzade/NexTalk/cmd/shell"
 	cmdworker "github.com/erfanheydarzade/NexTalk/cmd/worker"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
