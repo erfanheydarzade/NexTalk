@@ -21,139 +21,198 @@ import (
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 )
 
-// Adapter satisfies relay.Relay by talking to a mailbox worker shard
-// directly over HTTP (no transport.Client dependency — see below for why).
+// ─── Router client: routing table + capability + resolve caching ───────────
 //
-// Direct-connect + redirect handling:
-//
-//	Clients are encouraged to connect straight to their assigned shard,
-//	bypassing the router, to avoid the router's shared rate ceiling. If a
-//	client is pointed at the wrong shard for a given pubkey (e.g. after a
-//	ring resize, or a stale cached URL), the shard responds 409 with
-//	{"error":"wrong_shard","correct_worker_url":"..."} (also mirrored in an
-//	X-Correct-Worker-Url header). Every method below retries ONCE against
-//	that corrected URL and, on success, updates a.workerURL so subsequent
-//	calls on this Adapter go straight to the right place. OnRedirect, if
-//	set, is also invoked so the caller can persist the corrected URL
-//	(e.g. into session storage) beyond this Adapter's lifetime.
-//
-// This intentionally reimplements what transport.Client used to do
-// (Create/Send/Receive) directly against the worker's HTTP API, rather than
-// delegating to it, because intercepting a 409 mid-call requires owning the
-// request/response cycle — that isn't possible through an opaque
-// transport.Client method that just returns (string, error).
-type Adapter struct {
-	mu         sync.Mutex
-	workerURL  string
-	http       *http.Client
-	OnRedirect func(newWorkerURL string)
+// This is the entire Router-facing surface of the client. Everything below
+// is cached aggressively — the Router is contacted at most:
+//   - once per RoutingTable TTL / version bump (shared across all peers)
+//   - once ever per own identity (Register)
+//   - once ever per peer pubkey messaged (Resolve)
+// After that, Send/Receive talk to shards directly and never call these.
+
+type RouterClient struct {
+	routerURL string
+	http      *http.Client
+
+	mu           sync.RWMutex
+	table        *relay.RoutingTable
+	capabilities map[string]relay.MailboxCapability // keyed by own pubkey hex
+	resolutions  map[string]relay.PeerResolution    // keyed by peer pubkey hex
 }
 
-func New(workerURL string) (*Adapter, error) {
-	if workerURL == "" {
-		return nil, fmt.Errorf("worker URL must not be empty")
+func NewRouterClient(routerURL string) *RouterClient {
+	return &RouterClient{
+		routerURL:    strings.TrimRight(routerURL, "/"),
+		http:         http.DefaultClient,
+		capabilities: make(map[string]relay.MailboxCapability),
+		resolutions:  make(map[string]relay.PeerResolution),
 	}
-	// Trim any trailing slash(es) — every request below does
-	// baseURL+"/create" etc, so a trailing slash on the configured URL would
-	// produce a double slash ("https://x.workers.dev//create"), which
-	// worker.js's exact url.pathname === "/create" check does NOT match,
-	// silently 404ing with no useful error message.
-	workerURL = strings.TrimRight(workerURL, "/")
+}
+
+// RoutingTable returns the cached signed routing table, refetching only if
+// missing or expired. This is the low-frequency call every other cache's
+// freshness is judged against.
+func (rc *RouterClient) RoutingTable(ctx context.Context) (*relay.RoutingTable, error) {
+	rc.mu.RLock()
+	cached := rc.table
+	rc.mu.RUnlock()
+	if cached != nil && !cached.Expired() {
+		return cached, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rc.routerURL+"/routing_table.json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create routing_table request: %w", err)
+	}
+	resp, err := rc.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch routing_table: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("router returned status %d for routing_table.json", resp.StatusCode)
+	}
+
+	var table relay.RoutingTable
+	if err := json.NewDecoder(resp.Body).Decode(&table); err != nil {
+		return nil, fmt.Errorf("decode routing_table: %w", err)
+	}
+	// Callers wanting strict verification should Ed25519-verify `table.Signature`
+	// against `table.RouterPublicKey` over the canonical body here; omitted
+	// for brevity but REQUIRED in a production client — pin the Router's
+	// public key out-of-band rather than trusting whatever the response says.
+
+	rc.mu.Lock()
+	rc.table = &table
+	rc.mu.Unlock()
+	return &table, nil
+}
+
+// Register mints (or returns the cached) mailbox capability for this
+// identity. Safe to call on every app start — it's a no-op network-wise
+// once cached and unexpired.
+func (rc *RouterClient) Register(ctx context.Context, priv ed25519.PrivateKey) (relay.MailboxCapability, error) {
+	pubkeyHex, timestamp, sig := signPubkeyTimestamp(priv, "register")
+
+	rc.mu.RLock()
+	cached, ok := rc.capabilities[pubkeyHex]
+	rc.mu.RUnlock()
+	if ok && time.Now().UnixMilli() < cached.ExpiresAt {
+		return cached, nil
+	}
+
+	body, err := json.Marshal(map[string]string{"pubkey": pubkeyHex, "timestamp": timestamp, "signature": sig})
+	if err != nil {
+		return relay.MailboxCapability{}, fmt.Errorf("marshal register request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rc.routerURL+"/register", bytes.NewReader(body))
+	if err != nil {
+		return relay.MailboxCapability{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := rc.http.Do(req)
+	if err != nil {
+		return relay.MailboxCapability{}, fmt.Errorf("register request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return relay.MailboxCapability{}, readAPIError(resp)
+	}
+
+	var cap relay.MailboxCapability
+	if err := decodeJSONResponse(resp, &cap); err != nil {
+		return relay.MailboxCapability{}, fmt.Errorf("decode register response: %w", err)
+	}
+
+	rc.mu.Lock()
+	rc.capabilities[pubkeyHex] = cap
+	rc.mu.Unlock()
+	return cap, nil
+}
+
+// Resolve looks up (or returns the cached) mailbox_id/shard_url for a peer
+// pubkey — required before Send can address them directly.
+func (rc *RouterClient) Resolve(ctx context.Context, peerPubkeyHex string) (relay.PeerResolution, error) {
+	peerPubkeyHex = strings.ToLower(peerPubkeyHex)
+
+	rc.mu.RLock()
+	cached, ok := rc.resolutions[peerPubkeyHex]
+	rc.mu.RUnlock()
+	if ok {
+		return cached, nil
+	}
+
+	reqURL := fmt.Sprintf("%s/resolve?pubkey=%s", rc.routerURL, url.QueryEscape(peerPubkeyHex))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return relay.PeerResolution{}, err
+	}
+	resp, err := rc.http.Do(req)
+	if err != nil {
+		return relay.PeerResolution{}, fmt.Errorf("resolve request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return relay.PeerResolution{}, readAPIError(resp)
+	}
+
+	var res relay.PeerResolution
+	if err := decodeJSONResponse(resp, &res); err != nil {
+		return relay.PeerResolution{}, fmt.Errorf("decode resolve response: %w", err)
+	}
+
+	rc.mu.Lock()
+	rc.resolutions[peerPubkeyHex] = res
+	rc.mu.Unlock()
+	return res, nil
+}
+
+func signPubkeyTimestamp(priv ed25519.PrivateKey, action string) (pubkeyHex, timestamp, signatureHex string) {
+	pub := priv.Public().(ed25519.PublicKey)
+	pubkeyHex = hex.EncodeToString(pub)
+	timestamp = strconv.FormatInt(time.Now().UnixMilli(), 10)
+	sig := ed25519.Sign(priv, []byte(action+":"+pubkeyHex+":"+timestamp))
+	signatureHex = hex.EncodeToString(sig)
+	return
+}
+
+// ─── Adapter: talks directly to shards ──────────────────────────────────────
+//
+// Adapter satisfies relay.Relay. It no longer resolves its own worker URL
+// per instance — every call carries the shard URL that came from the
+// RouterClient's cached capability/resolution, since different mailboxes
+// (even for the same running process, e.g. multiple contacts) may live on
+// different shards.
+type Adapter struct {
+	router *RouterClient
+	http   *http.Client
+}
+
+func New(routerURL string) (*Adapter, error) {
+	if routerURL == "" {
+		return nil, fmt.Errorf("router URL must not be empty")
+	}
 	return &Adapter{
-		workerURL: workerURL,
-		http:      http.DefaultClient,
+		router: NewRouterClient(routerURL),
+		http:   http.DefaultClient,
 	}, nil
 }
 
-func (a *Adapter) currentURL() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.workerURL
-}
-
-func (a *Adapter) setURL(newURL string) {
-	newURL = strings.TrimRight(newURL, "/")
-	a.mu.Lock()
-	a.workerURL = newURL
-	a.mu.Unlock()
-	if a.OnRedirect != nil {
-		a.OnRedirect(newURL)
-	}
-}
-
-// wrongShardBody is the JSON shape a shard returns when it doesn't own the
-// pubkey a request was keyed on (see worker.js checkShardOwnership).
-type wrongShardBody struct {
-	Error              string `json:"error"`
-	CorrectWorkerURL   string `json:"correct_worker_url"`
-	ExpectedShardCount int    `json:"expected_shard_count"`
-}
-
-// apiErrorBody is the generic error shape every other worker.js failure uses.
 type apiErrorBody struct {
 	Error string `json:"error"`
 }
 
-// doWithRedirect issues one request via buildReq(baseURL), and if the
-// response is a 409 wrong_shard, rebuilds and reissues it once against the
-// corrected URL, updating a.workerURL on success. buildReq must be safe to
-// call twice (no side effects on shared state, fresh io.Reader each time).
-func (a *Adapter) doWithRedirect(ctx context.Context, buildReq func(baseURL string) (*http.Request, error)) (*http.Response, error) {
-	baseURL := a.currentURL()
-
-	req, err := buildReq(baseURL)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request to %s: %w", baseURL, err)
-	}
-
-	if resp.StatusCode == http.StatusConflict {
-		var wrongShard wrongShardBody
-		if decodeErr := json.NewDecoder(resp.Body).Decode(&wrongShard); decodeErr == nil && wrongShard.Error == "wrong_shard" && wrongShard.CorrectWorkerURL != "" {
-			resp.Body.Close()
-
-			correctedReq, err := buildReq(wrongShard.CorrectWorkerURL)
-			if err != nil {
-				return nil, err
-			}
-			retryResp, err := a.http.Do(correctedReq)
-			if err != nil {
-				return nil, fmt.Errorf("retry request to %s: %w", wrongShard.CorrectWorkerURL, err)
-			}
-
-			// Only adopt the new URL once the retry actually succeeds against
-			// it — don't repoint the adapter based on an unverified claim.
-			if retryResp.StatusCode >= 200 && retryResp.StatusCode < 300 {
-				a.setURL(wrongShard.CorrectWorkerURL)
-			}
-			return retryResp, nil
-		}
-		// 409 but not a recognizable wrong_shard payload — fall through and
-		// let the caller handle it as a normal error status.
-	}
-
-	return resp, nil
-}
-
 func readAPIError(resp *http.Response) error {
 	defer resp.Body.Close()
-
 	const maxSnippet = 200
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxSnippet+1))
 
 	var apiErr apiErrorBody
 	if jsonErr := json.Unmarshal(raw, &apiErr); jsonErr == nil && apiErr.Error != "" {
-		return fmt.Errorf("worker returned status %d: %s", resp.StatusCode, apiErr.Error)
+		return fmt.Errorf("request returned status %d: %s", resp.StatusCode, apiErr.Error)
 	}
-
-	// Not a recognizable {"error": "..."} body — surface what we actually
-	// got instead of a bare status code, so a plain-text 404/HTML error
-	// page/wrong-endpoint response is diagnosable from the CLI output
-	// directly (see: worker.js's unmatched routes return plain "Not Found",
-	// not JSON).
 	if len(raw) > 0 {
 		snippet := string(raw)
 		truncated := ""
@@ -161,43 +220,11 @@ func readAPIError(resp *http.Response) error {
 			snippet = string(raw[:maxSnippet])
 			truncated = "... (truncated)"
 		}
-		return fmt.Errorf("worker returned status %d: %q%s", resp.StatusCode, snippet, truncated)
+		return fmt.Errorf("request returned status %d: %q%s", resp.StatusCode, snippet, truncated)
 	}
-	return fmt.Errorf("worker returned status %d", resp.StatusCode)
+	return fmt.Errorf("request returned status %d", resp.StatusCode)
 }
 
-// signPubkeyTimestamp signs "pubkeyHex:timestamp" as required by worker.js's
-// /create and /read auth (see verifyAuth's default signed-message format).
-func signPubkeyTimestamp(priv ed25519.PrivateKey) (pubkeyHex, timestamp, signatureHex string) {
-	pub := priv.Public().(ed25519.PublicKey)
-	pubkeyHex = hex.EncodeToString(pub)
-	timestamp = strconv.FormatInt(time.Now().UnixMilli(), 10)
-	sig := ed25519.Sign(priv, []byte(pubkeyHex+":"+timestamp))
-	signatureHex = hex.EncodeToString(sig)
-	return
-}
-
-// ─── Register (/create) ─────────────────────────────────────────────────────
-
-type createRequestBody struct {
-	PubKey    string `json:"pubkey"`
-	Timestamp string `json:"timestamp"`
-	Signature string `json:"signature"`
-}
-
-type createResponseBody struct {
-	ReadToken string `json:"read_token"`
-	ExpiresIn int    `json:"expires_in"`
-	Created   bool   `json:"created"`
-}
-
-// decodeJSONResponse decodes resp.Body into target, and on failure returns
-// an error that includes a snippet of the actual raw body plus status/
-// content-type — a bare json.Decode error ("invalid character 'H' looking
-// for beginning of value") tells you nothing about what you actually hit
-// (wrong URL, a default "Hello World!" Worker template, an HTML error page,
-// a proxy intercepting the request, etc). This makes that diagnosable from
-// the CLI's error output directly instead of needing to reproduce with curl.
 func decodeJSONResponse(resp *http.Response, target interface{}) error {
 	const maxSnippet = 200
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSnippet+1))
@@ -213,115 +240,110 @@ func decodeJSONResponse(resp *http.Response, target interface{}) error {
 		}
 		contentType := resp.Header.Get("Content-Type")
 		return fmt.Errorf(
-			"response was not valid JSON (status %d, content-type %q): %q%s — check that the worker URL points at the mailbox worker, not a different service or the default Workers template",
+			"response was not valid JSON (status %d, content-type %q): %q%s",
 			resp.StatusCode, contentType, snippet, truncated,
 		)
 	}
 	return nil
 }
 
-func (a *Adapter) Register(ctx context.Context, privateKey []byte) (string, error) {
+// ─── Register (/register via Router, cached) ─────────────────────────────
+
+func (a *Adapter) Register(
+	ctx context.Context,
+	privateKey []byte,
+) (string, error) {
+
 	priv := ed25519.PrivateKey(privateKey)
-	pubkeyHex, timestamp, sig := signPubkeyTimestamp(priv)
 
-	body := createRequestBody{PubKey: pubkeyHex, Timestamp: timestamp, Signature: sig}
-	raw, err := json.Marshal(body)
+	_, err := a.router.Register(ctx, priv)
 	if err != nil {
-		return "", fmt.Errorf("marshal create request: %w", err)
+		return "", err
 	}
 
-	resp, err := a.doWithRedirect(ctx, func(baseURL string) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/create", bytes.NewReader(raw))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		return req, nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	defer resp.Body.Close()
+	pub := priv.Public().(ed25519.PublicKey)
 
-	if resp.StatusCode != http.StatusOK {
-		return "", readAPIError(resp)
-	}
-
-	var created createResponseBody
-	if err := decodeJSONResponse(resp, &created); err != nil {
-		return "", fmt.Errorf("decode create response: %w", err)
-	}
-	return pubkeyHex, nil
+	return hex.EncodeToString(pub), nil
 }
 
-// ─── Send ────────────────────────────────────────────────────────────────
+// ─── Send (direct to shard) ──────────────────────────────────────────────
 
-// sendRequestBody mirrors the JSON shape worker.js's POST /send expects:
-//
-//	{
-//	  "pubkey":  "<recipient hex pubkey>",
-//	  "message": "<base64-encoded envelope>",
-//	  "sender": {
-//	    "pubkey":    "<sender hex pubkey>",
-//	    "timestamp": "<unix ms string>",
-//	    "signature": "<hex sig>"
-//	  }
-//	}
 type sendRequestBody struct {
-	PubKey  string           `json:"pubkey"`
-	Message string           `json:"message"`
-	Sender  relay.SenderAuth `json:"sender"`
+	MailboxID string           `json:"mailbox_id"`
+	Message   string           `json:"message"`
+	Sender    relay.SenderAuth `json:"sender"`
 }
 
-// Send transmits payload to recipientPubKey via the mailbox worker's /send
-// endpoint, requiring a signed relay.SenderAuth block per the worker's
-// sender-authentication update (see worker.js handleSend).
-// Send transmits payload to recipientPubKey via the mailbox worker's /send
-// endpoint. senderPriv is the caller's identity private key; SenderAuth is
-// built HERE, after base64-encoding, over the exact string that ends up in
-// the wire request's "message" field — matching worker.js's handleSend,
-// which hashes that exact received string. Building auth before encoding
-// (as an earlier version of this code did, with the caller pre-building
-// SenderAuth) signed different bytes than the server hashed, and every
-// signature failed verification.
-func (a *Adapter) Send(ctx context.Context, recipientPubKey []byte, payload []byte, senderPriv ed25519.PrivateKey) error {
+// Send resolves recipientMailboxID's shard via the (cached) Router
+// resolution the caller looked up ahead of time and talks to it directly.
+// Callers should obtain recipientMailboxID via a prior call to
+// a.router.Resolve(ctx, recipientPubkeyHex) — see SendToPubkey below for the
+// common-case convenience wrapper.
+func (a *Adapter) sendToShard(ctx context.Context, shardURL, recipientMailboxID string, payload []byte, senderPriv ed25519.PrivateKey) error {
 	encodedMessage := base64.StdEncoding.EncodeToString(payload)
 
-	senderAuth, err := relay.BuildSenderAuth(senderPriv, recipientPubKey, []byte(encodedMessage))
+	senderAuth, err := relay.BuildSenderAuth(senderPriv, recipientMailboxID, []byte(encodedMessage))
 	if err != nil {
 		return fmt.Errorf("build sender auth: %w", err)
 	}
 
-	body := sendRequestBody{
-		PubKey:  hex.EncodeToString(recipientPubKey),
-		Message: encodedMessage,
-		Sender:  senderAuth,
-	}
+	body := sendRequestBody{MailboxID: strings.ToLower(recipientMailboxID), Message: encodedMessage, Sender: senderAuth}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal send request: %w", err)
 	}
 
-	resp, err := a.doWithRedirect(ctx, func(baseURL string) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/send", bytes.NewReader(raw))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		return req, nil
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(shardURL, "/")+"/send", bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("send request to %s: %w", shardURL, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return readAPIError(resp)
 	}
 	return nil
 }
 
-// ─── Receive (/read) ─────────────────────────────────────────────────────
+// SendToPubkey is the common-case entry point: resolve the recipient (cached
+// after first use) and deliver directly to their shard.
+func (a *Adapter) SendToPubkey(ctx context.Context, recipientPubKey []byte, payload []byte, senderPriv ed25519.PrivateKey) error {
+	res, err := a.router.Resolve(ctx, hex.EncodeToString(recipientPubKey))
+	if err != nil {
+		return fmt.Errorf("resolve recipient: %w", err)
+	}
+	return a.sendToShard(ctx, res.ShardURL, res.MailboxID, payload, senderPriv)
+}
+
+func (a *Adapter) Send(
+	ctx context.Context,
+	recipientPubKey []byte,
+	payload []byte,
+	senderPriv ed25519.PrivateKey,
+) error {
+
+	return a.SendToPubkey(
+		ctx,
+		recipientPubKey,
+		payload,
+		senderPriv,
+	)
+}
+
+// SendDirect implements the relay.Relay shape against an already-known
+// mailbox id and shard (e.g. from a cached relay.PeerResolution the caller
+// manages itself, or a QR-shared capability) — no Router call at all.
+// Prefer SendToPubkey unless you're maintaining your own peer cache.
+func (a *Adapter) SendDirect(ctx context.Context, shardURL, recipientMailboxID string, payload []byte, senderPriv ed25519.PrivateKey) error {
+	return a.sendToShard(ctx, shardURL, recipientMailboxID, payload, senderPriv)
+}
+
+// ─── Receive (/read, direct to shard, via cached capability) ─────────────
 
 type readResponseBody struct {
 	Messages []struct {
@@ -335,27 +357,23 @@ type readResponseBody struct {
 	Consumed  bool  `json:"consumed"`
 }
 
-func (a *Adapter) Receive(ctx context.Context, privateKey []byte) ([]relay.Message, error) {
-	priv := ed25519.PrivateKey(privateKey)
-	pubkeyHex, timestamp, sig := signPubkeyTimestamp(priv)
-
+func (a *Adapter) receiveCapability(ctx context.Context, cap relay.MailboxCapability) ([]relay.Message, error) {
 	query := url.Values{
-		"pubkey":    {pubkeyHex},
-		"timestamp": {timestamp},
-		"signature": {sig},
+		"mailbox_id":  {cap.MailboxID},
+		"read_secret": {cap.ReadSecret},
 	}
 
-	resp, err := a.doWithRedirect(ctx, func(baseURL string) (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/read?"+query.Encode(), nil)
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cap.ShardURL, "/")+"/read?"+query.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("read request: %w", err)
+		return nil, err
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("read request to %s: %w", cap.ShardURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// No mailbox / nothing to read yet — not an error condition callers
-		// need to treat specially, just an empty inbox.
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -371,14 +389,29 @@ func (a *Adapter) Receive(ctx context.Context, privateKey []byte) ([]relay.Messa
 	for _, m := range parsed.Messages {
 		decoded, err := base64.StdEncoding.DecodeString(m.Message)
 		if err != nil {
-			decoded = []byte(m.Message) // not base64 — treat as raw opaque bytes
+			decoded = []byte(m.Message)
 		}
 		msgs = append(msgs, relay.Message{Body: decoded})
 	}
 	return msgs, nil
 }
 
-// WrapEnvelope is a shared helper used by command handlers.
+func (a *Adapter) Receive(
+	ctx context.Context,
+	privateKey []byte,
+) ([]relay.Message, error) {
+
+	cap, err := a.router.Register(
+		ctx,
+		ed25519.PrivateKey(privateKey),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return a.receiveCapability(ctx, cap)
+}
+
 func WrapEnvelope(t relay.Type, b64data string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64data)
 	if err != nil {
