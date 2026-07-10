@@ -43,7 +43,8 @@ func (c *Client) Decrypt(payloadBytes []byte) (string, []byte, error) {
 
 // NewClient creates a fresh cryptographic identity.
 //
-// ID = hex(Ed25519Public) + sha3_256(DilithiumPublic)
+// FIX: corrected comment — DerivePeerID encodes with Base58, not hex.
+// Id = base58( Ed25519IdentityPublic + sha3_256(DilithiumPublic) )
 func NewClient() *Client {
 	pubEd, privEd, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -62,6 +63,16 @@ func NewClient() *Client {
 	}
 }
 
+// SaveClient persists the full client identity — including long-term
+// Ed25519/Dilithium private keys and every active SecurePeer session
+// (root keys, chain keys, HMAC keys, file keys) — to disk as JSON.
+//
+// FIX (critical): changed file mode from 0644 (world-readable) to 0600
+// (owner read/write only). The previous mode allowed any other local
+// user on a shared/multi-user system to read this file directly and
+// extract the full identity plus every active session's key material —
+// a complete compromise of past and future traffic for this client,
+// not just a single message.
 func SaveClient(cl *Client) {
 	filename := fmt.Sprintf("%s.json", cl.Id)
 	data, err := json.MarshalIndent(cl, "", "  ")
@@ -69,7 +80,19 @@ func SaveClient(cl *Client) {
 		fmt.Printf("[-] Failed to serialize client %s: %v\n", cl.Id, err)
 		return
 	}
-	_ = os.WriteFile(filename, data, 0644)
+
+	// Write with restrictive permissions from the start. Note: if the
+	// file already exists with looser permissions from a prior (pre-fix)
+	// run, os.WriteFile does NOT change the mode of an existing file on
+	// all platforms/edge cases — see the explicit Chmod below as a
+	// belt-and-suspenders fix for upgrades from vulnerable versions.
+	if err := os.WriteFile(filename, data, 0600); err != nil {
+		fmt.Printf("[-] Failed to write client file %s: %v\n", filename, err)
+		return
+	}
+	if err := os.Chmod(filename, 0600); err != nil {
+		fmt.Printf("[-] Failed to enforce permissions on %s: %v\n", filename, err)
+	}
 }
 
 // NewSecurePeer initializes a new secure session state for a peer.

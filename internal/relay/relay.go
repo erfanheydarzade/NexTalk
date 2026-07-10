@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -59,7 +60,7 @@ func BuildSenderAuth(senderPriv ed25519.PrivateKey, recipientMailboxID string, p
 	msgHash := sha256.Sum256(payload)
 	msgHashHex := hex.EncodeToString(msgHash[:])
 
-	signedMessage := fmt.Sprintf("send:%s:%s:%s:%s", senderHex, strings_toLower(recipientMailboxID), timestamp, msgHashHex)
+	signedMessage := fmt.Sprintf("send:%s:%s:%s:%s", senderHex, strings.ToLower(recipientMailboxID), timestamp, msgHashHex)
 	sig := ed25519.Sign(senderPriv, []byte(signedMessage))
 
 	return SenderAuth{
@@ -67,17 +68,6 @@ func BuildSenderAuth(senderPriv ed25519.PrivateKey, recipientMailboxID string, p
 		Timestamp: timestamp,
 		Signature: hex.EncodeToString(sig),
 	}, nil
-}
-
-func strings_toLower(s string) string {
-	// tiny local helper to avoid importing "strings" just for this
-	out := []byte(s)
-	for i, c := range out {
-		if c >= 'A' && c <= 'Z' {
-			out[i] = c + ('a' - 'A')
-		}
-	}
-	return string(out)
 }
 
 // MailboxCapability is what an Adapter caches internally, forever, after

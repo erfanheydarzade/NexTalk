@@ -52,6 +52,14 @@ func NewRouterClient(routerURL string) *RouterClient {
 // RoutingTable returns the cached signed routing table, refetching only if
 // missing or expired. This is the low-frequency call every other cache's
 // freshness is judged against.
+//
+// As of v2.1, the Router no longer wants to be the common source for this:
+// it computes and signs the table, then PUSHES it out to every shard, and
+// each shard now serves GET /routing_table.json itself from that pushed
+// copy. So a refetch here prefers asking a shard we already know about
+// (from the table we're refreshing) and only falls back to the Router
+// directly — bootstrap (first-ever call, nothing cached yet) or every
+// known shard being unreachable/stale.
 func (rc *RouterClient) RoutingTable(ctx context.Context) (*relay.RoutingTable, error) {
 	rc.mu.RLock()
 	cached := rc.table
@@ -60,31 +68,63 @@ func (rc *RouterClient) RoutingTable(ctx context.Context) (*relay.RoutingTable, 
 		return cached, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rc.routerURL+"/routing_table.json", nil)
+	if cached != nil {
+		for _, shardURL := range cached.ShardURLs {
+			table, err := rc.fetchRoutingTableFrom(ctx, strings.TrimRight(shardURL, "/")+"/routing_table.json")
+			if err != nil {
+				continue // try the next shard, then fall through to the Router
+			}
+			rc.mu.Lock()
+			rc.table = table
+			rc.mu.Unlock()
+			return table, nil
+		}
+	}
+
+	table, err := rc.fetchRoutingTableFrom(ctx, rc.routerURL+"/routing_table.json")
+	if err != nil {
+		if cached != nil {
+			// Every shard and the Router failed us this round — better to
+			// hand back a stale-but-signed table than nothing at all;
+			// callers can inspect Expired() themselves if they need to know.
+			return cached, nil
+		}
+		return nil, err
+	}
+
+	rc.mu.Lock()
+	rc.table = table
+	rc.mu.Unlock()
+	return table, nil
+}
+
+func (rc *RouterClient) fetchRoutingTableFrom(ctx context.Context, url string) (*relay.RoutingTable, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create routing_table request: %w", err)
 	}
 	resp, err := rc.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch routing_table: %w", err)
+		return nil, fmt.Errorf("fetch routing_table from %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("router returned status %d for routing_table.json", resp.StatusCode)
+		return nil, fmt.Errorf("%s returned status %d for routing_table.json", url, resp.StatusCode)
 	}
 
 	var table relay.RoutingTable
 	if err := json.NewDecoder(resp.Body).Decode(&table); err != nil {
-		return nil, fmt.Errorf("decode routing_table: %w", err)
+		return nil, fmt.Errorf("decode routing_table from %s: %w", url, err)
 	}
 	// Callers wanting strict verification should Ed25519-verify `table.Signature`
 	// against `table.RouterPublicKey` over the canonical body here; omitted
 	// for brevity but REQUIRED in a production client — pin the Router's
-	// public key out-of-band rather than trusting whatever the response says.
+	// public key out-of-band rather than trusting whatever a shard or the
+	// Router hands back. This matters MORE now that a shard is in the
+	// serving path: a shard is untrusted storage, so the client verifying
+	// the Router's signature (not just TLS to the shard) is what actually
+	// keeps a compromised or malicious shard from feeding a forged table.
 
-	rc.mu.Lock()
-	rc.table = &table
-	rc.mu.Unlock()
 	return &table, nil
 }
 

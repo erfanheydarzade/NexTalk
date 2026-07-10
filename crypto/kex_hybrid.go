@@ -36,14 +36,6 @@ func keyLabel(key []byte) string {
 }
 
 // SecureMessage represents an encrypted transport unit in the system.
-//
-// It binds ciphertext to:
-// - sender identity
-// - ratchet state (for forward secrecy)
-// - nonce (ordering / replay protection)
-// - authentication tag (integrity protection)
-//
-// The structure is intentionally minimal but sufficient for a ratchet-based protocol.
 type SecureMessage struct {
 	SenderID    string `json:"s"`
 	RatchetKey  []byte `json:"k"`
@@ -55,14 +47,6 @@ type SecureMessage struct {
 }
 
 // SecurePeer holds the full cryptographic state of a participant.
-//
-// It combines:
-// - long-term identity keys (Ed25519)
-// - key exchange material (X25519 + PQC hybrid)
-// - ratchet state (send/receive chains)
-// - session keys (root, HMAC, file encryption)
-//
-// This struct is the entire security context of a peer.
 type SecurePeer struct {
 	ExpectedPeerHash []byte `json:"expectedPeerHash"`
 
@@ -103,8 +87,6 @@ type SecurePeer struct {
 	SeenOffers map[string]bool `json:"seenOffers"`
 }
 
-// Exposes raw public key material for use in handshake and identity binding.
-// These functions avoid direct struct access to keep serialization consistent.
 func (sp *SecurePeer) PublicBytes() []byte {
 	return sp.Public
 }
@@ -150,11 +132,8 @@ func DilithiumVerify(pubBytes, message, sig []byte) bool {
 	return scheme.Verify(pub, message, sig, nil)
 }
 
-// DerivePeerID builds the canonical peer ID using RawURLEncoding:
-//
-// base64RawURL( ed25519IdentityPublic + sha3_256(DilithiumPublicKey) )
-//
-// The total raw length is 64 bytes, resulting in an 86-character Base64 string.
+// DerivePeerID builds the canonical peer ID using Base58:
+// base58( ed25519IdentityPublic + sha3_256(DilithiumPublicKey) )
 func DerivePeerID(identityPublic, dilithiumPublic []byte) string {
 	h := sha3.New256()
 	h.Write(dilithiumPublic)
@@ -164,16 +143,7 @@ func DerivePeerID(identityPublic, dilithiumPublic []byte) string {
 	return base58.Encode(combined)
 }
 
-// GetSign creates a signature over the peer's public identity material.
-//
-// It binds:
-// - static public key
-// - DH public key
-// - PQC public key
-//
-// This ensures integrity of the initial handshake identity bundle.
-// GetSign returns the classical Ed25519 signature (unchanged).
-// GetSign creates a classical Ed25519 signature
+// GetSign creates a classical Ed25519 signature over the peer's public identity material.
 func (sp *SecurePeer) GetSign(offerID []byte, recipientID []byte) []byte {
 	msg := sp.buildSignMessage(offerID, recipientID)
 	return ed25519.Sign(sp.IdentityPrivate, msg)
@@ -185,10 +155,10 @@ func (sp *SecurePeer) GetDilithiumSign(offerID []byte, recipientID []byte) []byt
 	return DilithiumSign(sp.PqcSignPrivate, msg)
 }
 
-// buildSignMessage is the single source of truth
+// buildSignMessage is the single source of truth for what gets signed.
 func (sp *SecurePeer) buildSignMessage(offerID []byte, recipientID []byte) []byte {
 	return bytes.Join([][]byte{
-		recipientID, // Use the raw bytes directly
+		recipientID,
 		sp.PublicBytes(),
 		sp.DhPubBytes(),
 		sp.PqcPubBytes(),
@@ -198,7 +168,7 @@ func (sp *SecurePeer) buildSignMessage(offerID []byte, recipientID []byte) []byt
 }
 
 func GenerateOfferID() []byte {
-	b := make([]byte, 16) // ۱۶ بایت (۱۲۸ بیت) برای جلوگیری از Collision کاملاً کافیست
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
@@ -206,9 +176,6 @@ func GenerateOfferID() []byte {
 }
 
 // sortedByHash deterministically orders two byte arrays based on SHA-256 hash.
-//
-// This is used to ensure both peers derive consistent roles
-// (initiator vs responder) without external coordination.
 func (sp *SecurePeer) sortedByHash(a []byte, b []byte) ([]byte, []byte) {
 	ha := sha256.Sum256(a)
 	hb := sha256.Sum256(b)
@@ -219,9 +186,6 @@ func (sp *SecurePeer) sortedByHash(a []byte, b []byte) ([]byte, []byte) {
 }
 
 // logKeyEvent prints a debug-safe representation of key material.
-//
-// It intentionally avoids leaking full keys and only shows short prefixes
-// for observability during development and debugging.
 func (sp *SecurePeer) logKeyEvent(event string, keys map[string][]byte) {
 	parts := []string{fmt.Sprintf("[KEY] %s", event)}
 	for name, key := range keys {
@@ -231,20 +195,11 @@ func (sp *SecurePeer) logKeyEvent(event string, keys map[string][]byte) {
 }
 
 // getSkipKeyStr generates a deterministic lookup key for skipped message keys.
-//
-// It combines DH state and message number to uniquely identify ratcheted keys.
 func (sp *SecurePeer) getSkipKeyStr(dh string, n int) string {
 	return fmt.Sprintf("%s:%d", dh, n)
 }
 
 // GetTranscript builds a deterministic handshake transcript hash.
-//
-// It:
-// - hashes all identity + ephemeral public values
-// - sorts them to remove ordering bias
-// - applies a domain-separated SHA3-512 hash
-//
-// This ensures both peers derive the same handshake binding material.
 func (sp *SecurePeer) GetTranscript(peerIdentityBytes, peerPublicBytes, peerDhPublicBytes, peerPqcPublicBytes []byte) []byte {
 	items := [][]byte{
 		sp.IdentityPublicBytes(),
@@ -280,21 +235,27 @@ func (sp *SecurePeer) GetTranscript(peerIdentityBytes, peerPublicBytes, peerDhPu
 
 // Handshake performs hybrid key agreement (ECDH + PQC) and session setup.
 //
-// It:
-// - verifies peer signature (identity binding)
-// - validates expected peer identity if set
-// - derives shared secret (X25519 + PQC)
-// - computes root key via HKDF (transcript-bound)
-// - initializes sending/receiving ratchet chains
-// - assigns session keys (HMAC, file encryption)
-//
-// This is the session bootstrap phase of the protocol.
+// SECURITY NOTE: this function verifies that peerEd25519Sig/peerDilithiumSig
+// are valid signatures BY peerIdentityBytes/peerDilithiumPublicBytes over msg.
+// That check alone is self-consistent and does NOT prove peerIdentityBytes
+// belongs to the SenderId the caller believes it's talking to. Callers
+// (AcceptOffer, FinishHandshake) MUST independently verify
+// DerivePeerID(peerIdentityBytes, peerDilithiumPublicBytes) == claimedSenderId
+// before calling this, or before trusting the returned peer identity.
 func (sp *SecurePeer) Handshake(
 	peerIdentityBytes, peerPublicBytes, peerDhPublicBytes,
 	peerKyberPublicBytes, peerDilithiumPublicBytes,
 	peerEd25519Sig, peerDilithiumSig,
 	pqcSharedSecret, offerID, recipientId []byte,
 ) error {
+
+	// FIX: reject malformed-length Ed25519 public keys before calling
+	// ed25519.Verify, which panics (rather than returning false) on
+	// keys that aren't exactly ed25519.PublicKeySize bytes. Without this,
+	// a tampered/truncated IdPub field is a one-shot remote DoS.
+	if len(peerIdentityBytes) != ed25519.PublicKeySize {
+		return fmt.Errorf("❌ invalid identity public key length: got %d, want %d", len(peerIdentityBytes), ed25519.PublicKeySize)
+	}
 
 	msg := bytes.Join([][]byte{
 		recipientId,
@@ -310,20 +271,25 @@ func (sp *SecurePeer) Handshake(
 		return fmt.Errorf("❌ invalid Ed25519 signature")
 	}
 
-	// 2. Verify Dilithium3 (post-quantum) — هر دو باید pass کنن
+	// 2. Verify Dilithium3 (post-quantum) — both must pass
 	if !DilithiumVerify(peerDilithiumPublicBytes, msg, peerDilithiumSig) {
 		return fmt.Errorf("❌ invalid Dilithium signature")
 	}
 
-	// 3. Verify ID binding
+	// 3. Verify ID binding (peer pinning), if pinned.
+	//
+	// FIX: removed the old second comparison that compared the raw
+	// 32-byte peerIdentityBytes directly against sp.ExpectedPeerHash.
+	// ExpectedPeerHash stores the base58-encoded DerivePeerID string
+	// (identity pub + sha3-256(dilithium pub)), which is a different
+	// length/format than a raw Ed25519 public key, so that comparison
+	// could never meaningfully succeed and just produced a confusing,
+	// effectively-dead security check. The single comparison below
+	// against the correctly-derived expectedID is the real check.
 	expectedID := DerivePeerID(peerIdentityBytes, peerDilithiumPublicBytes)
 	if sp.ExpectedPeerHash != nil &&
 		!bytes.Equal([]byte(expectedID), sp.ExpectedPeerHash) {
 		return fmt.Errorf("❌ peer ID mismatch")
-	}
-
-	if sp.ExpectedPeerHash != nil && !bytes.Equal(peerIdentityBytes, sp.ExpectedPeerHash) {
-		return fmt.Errorf("peer public key mismatch ❌")
 	}
 
 	eccShared, err := curve25519.X25519(sp.Private, peerPublicBytes)
@@ -370,15 +336,16 @@ func (sp *SecurePeer) Handshake(
 }
 
 // SkipMessageKeys advances the receive ratchet up to a target message index.
-//
-// It stores intermediate message keys to allow out-of-order decryption,
-// while enforcing a maximum skip limit to prevent state exhaustion attacks.
 func (sp *SecurePeer) SkipMessageKeys(untilMsgNumber int) error {
 	if sp.RecvNonce+maxSkip < untilMsgNumber {
 		return fmt.Errorf("too many skipped messages")
 	}
 
 	remoteDhStr := base64.StdEncoding.EncodeToString(sp.RemoteDhPublic)
+
+	if sp.SkippedMessages == nil {
+		sp.SkippedMessages = make(map[string][]byte)
+	}
 
 	for sp.RecvNonce < untilMsgNumber {
 		nextCk, mk := RatchetStep(sp.RecvCk)
@@ -390,12 +357,6 @@ func (sp *SecurePeer) SkipMessageKeys(untilMsgNumber int) error {
 }
 
 // DhRatchet updates the receive-side Diffie-Hellman state.
-//
-// It performs a new DH computation and re-derives:
-// - root key
-// - receiving chain key
-//
-// This is the core of forward secrecy across sessions.
 func (sp *SecurePeer) DhRatchet(remoteKey []byte) {
 	sp.RemoteDhPublic = remoteKey
 
@@ -409,20 +370,10 @@ func (sp *SecurePeer) DhRatchet(remoteKey []byte) {
 	sp.RecvCk = material[32:]
 	sp.RecvNonce = 0
 
-	// Signal that the next encrypt should do a DH ratchet step.
 	sp.pendingDhRatchet = true
 }
 
 // Encrypt produces an authenticated encrypted message using the send ratchet.
-//
-// Flow:
-// - optionally performs DH ratchet rotation
-// - derives message key from send chain
-// - encrypts plaintext using ChaCha20-Poly1305
-// - attaches AAD (DH + nonce)
-// - appends HMAC for integrity verification
-//
-// The result is a self-contained SecureMessage.
 func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 	var mk []byte
 	var currentDhPublic []byte
@@ -492,26 +443,11 @@ func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPu
 	copy(aadCopy, aad)
 
 	_, err = cipher.Open(nil, nonceBytes, ciphertext, aadCopy)
-	if err != nil {
-		return false
-	}
-
-	return true
+	return err == nil
 }
 
 // Decrypt validates and decrypts an incoming SecureMessage.
-//
-// Steps:
-// - verifies HMAC integrity
-// - checks skipped message cache
-// - handles DH ratchet updates if needed
-// - enforces replay protection via nonce ordering
-// - derives correct message key from receive chain
-// - decrypts ciphertext
-//
-// Supports out-of-order and delayed message delivery.
-// Decrypt validates and decrypts an incoming SecureMessage.
-// Now returns (senderID, plaintext, error)
+// Returns (senderID, plaintext, error)
 func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 	var msg SecureMessage
 
@@ -520,7 +456,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 	}
 
 	receivedTag := msg.Tag
-
 	msg.Tag = nil
 
 	payloadJson, err := json.Marshal(msg)
@@ -546,7 +481,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 		return msg.SenderID, plaintext, err
 
 	} else {
-		// 1. Check if the message is an older skipped message
 		skipKeyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(msg.RatchetKey), msg.Nonce)
 		if mk, exists := sp.SkippedMessages[skipKeyStr]; exists {
 			delete(sp.SkippedMessages, skipKeyStr)
@@ -554,7 +488,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 			return msg.SenderID, plaintext, err
 		}
 
-		// 2. Check for a DH Ratchet advance
 		if sp.RemoteDhPublic == nil || !bytes.Equal(msg.RatchetKey, sp.RemoteDhPublic) {
 			if sp.SkippedMessages == nil {
 				sp.SkippedMessages = make(map[string][]byte)
@@ -562,7 +495,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 			sp.DhRatchet(msg.RatchetKey)
 		}
 
-		// 3. Handle skipped messages
 		if msg.Nonce < sp.RecvNonce {
 			return "", nil, fmt.Errorf("replay attack or message too old (N=%d, expected >= %d)", msg.Nonce, sp.RecvNonce)
 		}
@@ -578,7 +510,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 			sp.RecvNonce++
 		}
 
-		// 4. Generate the key for the current message
 		nextCk, mk := RatchetStep(sp.RecvCk)
 		sp.RecvCk = nextCk
 		sp.RecvNonce++
@@ -589,12 +520,6 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 }
 
 // DecryptWithKey performs AEAD decryption using a derived message key.
-//
-// It reconstructs nonce and AAD from:
-// - message nonce
-// - DH public key
-//
-// Returns plaintext only if authentication succeeds.
 func (sp *SecurePeer) DecryptWithKey(mk []byte, n int, ciphertext []byte, dhPub []byte) ([]byte, error) {
 	cipher, err := chacha20poly1305.NewX(mk)
 	if err != nil {
