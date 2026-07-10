@@ -39,7 +39,7 @@ func RunOffline(api *core.Engine) {
 	var activeClient *crypto.Client
 
 	fmt.Println("=== NexTalk (Offline Transport) ===")
-	fmt.Println("init | load | offer | accept | finish | encrypt | decrypt | exit")
+	fmt.Println("init | load | offer | accept | finish | encrypt | decrypt | help | clear | exit")
 
 	for {
 		fmt.Print("\n> ")
@@ -173,6 +173,24 @@ func RunOffline(api *core.Engine) {
 			fmt.Printf("[+] sender: %s\n", senderID)
 			fmt.Printf("[+] message: %s\n", plain)
 
+		case "help":
+			fmt.Println("=== NexTalk (Offline Transport) ===")
+			fmt.Println("Commands:")
+			fmt.Println("  init                    Create a new identity")
+			fmt.Println("  load <id>               Load an existing identity")
+			fmt.Println("  offer                   Generate a handshake offer")
+			fmt.Println("  accept                  Accept a handshake offer")
+			fmt.Println("  finish                  Complete a handshake")
+			fmt.Println("  encrypt <peer> <msg>    Encrypt a message")
+			fmt.Println("  decrypt                 Decrypt a message package")
+			fmt.Println("  clear                   Clear the screen")
+			fmt.Println("  exit                    Quit")
+
+		case "clear":
+			fmt.Print("\033[H\033[2J")
+			fmt.Println("=== NexTalk (Offline Transport) ===")
+			fmt.Println("init | load | offer | accept | finish | encrypt | decrypt | help | clear | exit")
+			
 		case "exit":
 			fmt.Println("[+] bye.")
 			return

@@ -25,11 +25,14 @@ func (c *Command) Root() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "offline",
 		Short: "Offline handshake and encrypted messaging tools",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			RunOffline(c.engine)
+			return nil
+		},
 	}
 
 	cmd.AddCommand(
 		c.InitCommand(),
-		c.RunCommand(),
 		c.OfferCommand(),
 		c.AcceptCommand(),
 		c.FinishCommand(),

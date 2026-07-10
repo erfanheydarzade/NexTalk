@@ -266,24 +266,16 @@ func readAPIError(resp *http.Response) error {
 }
 
 func decodeJSONResponse(resp *http.Response, target interface{}) error {
-	const maxSnippet = 200
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSnippet+1))
+	err := json.NewDecoder(resp.Body).Decode(target)
 	if err != nil {
-		return fmt.Errorf("read response body: %w", err)
-	}
-	if jsonErr := json.Unmarshal(raw, target); jsonErr != nil {
-		snippet := string(raw)
-		truncated := ""
-		if len(raw) > maxSnippet {
-			snippet = string(raw[:maxSnippet])
-			truncated = "... (truncated)"
-		}
-		contentType := resp.Header.Get("Content-Type")
 		return fmt.Errorf(
-			"response was not valid JSON (status %d, content-type %q): %q%s",
-			resp.StatusCode, contentType, snippet, truncated,
+			"response was not valid JSON (status %d, content-type %q): %w",
+			resp.StatusCode,
+			resp.Header.Get("Content-Type"),
+			err,
 		)
 	}
+
 	return nil
 }
 

@@ -452,7 +452,7 @@ func RunGUI(api *core.Engine, cfg config.Config) {
 		choice := strings.TrimSpace(scanner.Text())
 
 		if choice == "4" || choice == "exit" {
-			printInfo("Shutting down NexTalk OS. Goodbye!")
+			printInfo("Shutting down NexTalk. Goodbye!")
 			break
 		}
 

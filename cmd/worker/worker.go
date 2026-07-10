@@ -1,241 +1,275 @@
 package worker
 
 import (
+	"bufio"
 	"context"
-	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
+	"os"
+	"strings"
 
-	base58 "github.com/mr-tron/base58"
-
-	Client "github.com/erfanheydarzade/NexTalk/client"
+	client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
-	"github.com/erfanheydarzade/NexTalk/internal/config"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
-	"github.com/erfanheydarzade/NexTalk/internal/session"
-	"github.com/spf13/cobra"
 )
 
-// peerIDByteLen is the expected decoded length of a base58 peer ID:
-// Ed25519 public key (32 bytes) + SHA3-256(Dilithium public key) (32 bytes).
-const peerIDByteLen = 64
+type ChatMessage struct {
+	Body   string
+	IsRead bool
+}
 
-// requestTimeout bounds how long a single relay round-trip may take.
-const requestTimeout = 15 * time.Second
+func RunWorker(api *core.Engine, workerURL string) {
+	scanner := bufio.NewScanner(os.Stdin)
+	ctx := context.Background()
 
-// ed25519PubFromID extracts the Ed25519 public key (first 32 bytes) from a
-// base58-encoded peer ID: base58(Ed25519[32] + sha3_256(Dilithium)[32]).
-func ed25519PubFromID(peerID string) ([]byte, error) {
-	raw, err := base58.Decode(peerID)
+	w, err := workerrelay.New(workerURL)
 	if err != nil {
-		return nil, fmt.Errorf("base58 decode: %w", err)
+		fmt.Println("[-] worker init failed:", err)
+		return
 	}
-	if len(raw) != peerIDByteLen {
-		return nil, fmt.Errorf("invalid peer ID: decoded length %d, want %d", len(raw), peerIDByteLen)
-	}
-	return raw[:32], nil
-}
 
-type workerCmd struct {
-	engine *core.Engine
-	cfg    config.Config
-}
+	var activeClient *client.Client
+	mailbox := make(map[string][]ChatMessage)
 
-func Register(parent *cobra.Command, engine *core.Engine, cfg config.Config) {
-	wc := &workerCmd{engine: engine, cfg: cfg}
-	group := &cobra.Command{
-		Use:   "worker",
-		Short: "Use the encrypted worker relay transport",
-	}
-	group.AddCommand(
-		wc.initCmd(),
-		wc.connectCmd(),
-		wc.listenCmd(),
-	)
-	parent.AddCommand(group)
-}
+	fmt.Println("=== NexTalk (Worker Transport) ===")
+	fmt.Println("init | load <id> | connect <peer> | listen | send <peer> <msg> | mailbox [peer] | clear | exit")
 
-func (wc *workerCmd) relay() (relay.Relay, error) {
-	return workerrelay.New(wc.cfg.WorkerURL)
-}
+	for {
+		fmt.Print("\n> ")
 
-func (wc *workerCmd) initCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "init",
-		Short: "Initialize identity and register a mailbox with the worker",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), requestTimeout)
-			defer cancel()
+		if !scanner.Scan() {
+			break
+		}
 
-			r, err := wc.relay()
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		cmd := strings.ToLower(parts[0])
+
+		switch cmd {
+
+		case "init":
+			activeClient = api.Initialize()
+			fmt.Println("[+] identity:", activeClient.Id)
+
+			pubHex, err := w.Register(ctx, activeClient.IdentityPrivate)
 			if err != nil {
-				return err
+				fmt.Println("[-] register failed:", err)
+				continue
 			}
-			cl := wc.engine.Initialize()
+			fmt.Println("[+] registered, relay pubkey:", pubHex)
 
-			pubHex, err := r.Register(ctx, cl.IdentityPrivate)
+		case "load":
+			if len(parts) < 2 {
+				fmt.Println("usage: load <id>")
+				continue
+			}
+			cl, err := api.LoadClient(parts[1])
 			if err != nil {
-				return fmt.Errorf("register: %w", err)
+				fmt.Println("[-] load failed:", err)
+				continue
+			}
+			activeClient = cl
+			fmt.Println("[+] loaded:", cl.Id)
+
+			if _, err := w.Register(ctx, cl.IdentityPrivate); err != nil {
+				fmt.Println("[-] re-register failed:", err)
+			} else {
+				fmt.Println("[+] re-registered with relay.")
 			}
 
-			expectedPubHex := hex.EncodeToString(cl.IdentityPublic)
-			if expectedPubHex != pubHex {
-				return fmt.Errorf(
-					"identity mismatch: local=%s worker=%s",
-					expectedPubHex,
-					pubHex,
-				)
+		case "connect":
+			if activeClient == nil {
+				fmt.Println("[-] init or load an identity first")
+				continue
 			}
-
-			if err := session.Save(cl.Id); err != nil {
-				return fmt.Errorf("save session: %w", err)
+			if len(parts) < 2 {
+				fmt.Println("usage: connect <peer>")
+				continue
 			}
-			fmt.Printf("✓ Initialized.\nPeer ID: %s\n", cl.Id)
-			return nil
-		},
-	}
-}
+			peerID := parts[1]
 
-func (wc *workerCmd) connectCmd() *cobra.Command {
-	var peerID string
-	c := &cobra.Command{
-		Use:   "connect",
-		Short: "Send a handshake offer to a peer via the worker",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), requestTimeout)
-			defer cancel()
-
-			// Validate the peer ID up front, before touching the network,
-			// so a typo fails fast with a clear message.
-			peerPubKey, err := ed25519PubFromID(peerID)
+			offerBytes, err := api.CreateOffer(peerID)
 			if err != nil {
-				return fmt.Errorf("invalid peer ID: %w", err)
+				fmt.Println("[-] offer failed:", err)
+				continue
 			}
 
-			r, err := wc.relay()
+			recipientPub, err := ed25519PubFromID(peerID)
 			if err != nil {
-				return err
+				fmt.Println("[-] invalid peer ID:", err)
+				continue
 			}
-			cl, err := session.Load(wc.engine)
-			if err != nil {
-				return fmt.Errorf("load session: %w", err)
+			if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, recipientPub, relay.TypeOffer, json.RawMessage(offerBytes)); err != nil {
+				fmt.Println("[-] send offer failed:", err)
+				continue
+			}
+			fmt.Println("[+] offer sent to", peerID)
+
+		case "listen":
+			if activeClient == nil {
+				fmt.Println("[-] init or load an identity first")
+				continue
 			}
 
-			offerBytes, err := wc.engine.CreateOffer(peerID)
+			msgs, err := w.Receive(ctx, activeClient.IdentityPrivate)
 			if err != nil {
-				return fmt.Errorf("create offer: %w", err)
+				fmt.Println("[-] receive failed:", err)
+				continue
+			}
+			if len(msgs) == 0 {
+				fmt.Println("[i] inbox empty.")
+				continue
 			}
 
-			if err := sendEnvelope(ctx, r, cl.IdentityPrivate, peerPubKey, relay.TypeOffer, offerBytes); err != nil {
-				return fmt.Errorf("send offer: %w", err)
-			}
-			fmt.Printf("✓ Offer sent to %s\n", peerID)
-			return nil
-		},
-	}
-	c.Flags().StringVar(&peerID, "peer", "", "Peer ID (base58)")
-	_ = c.MarkFlagRequired("peer")
-	return c
-}
-
-func (wc *workerCmd) listenCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "listen",
-		Short: "Poll the worker for incoming offers, answers, and messages",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), requestTimeout)
-			defer cancel()
-
-			r, err := wc.relay()
-			if err != nil {
-				return err
-			}
-			cl, err := session.Load(wc.engine)
-			if err != nil {
-				return fmt.Errorf("load session: %w", err)
-			}
-			msgs, err := r.Receive(ctx, cl.IdentityPrivate)
-			if err != nil {
-				return fmt.Errorf("receive: %w", err)
-			}
 			for _, m := range msgs {
-				if err := dispatch(ctx, wc.engine, r, cl.IdentityPrivate, m.Body); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "dispatch error: %v\n", err)
+				body := tryDecode(m.Body)
+				var env relay.Envelope
+				if err := json.Unmarshal(body, &env); err != nil {
+					continue
+				}
+
+				switch env.Type {
+				case relay.TypeOffer:
+					var offer client.HandshakeOffer
+					_ = json.Unmarshal(env.Data, &offer)
+
+					ansBytes, err := api.AcceptOffer(env.Data)
+					if err != nil {
+						fmt.Println("[-] accept offer failed:", err)
+						continue
+					}
+
+					senderPub, err := ed25519PubFromID(offer.SenderId)
+					if err != nil {
+						fmt.Println("[-] invalid sender ID:", err)
+						continue
+					}
+					if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, senderPub, relay.TypeAnswer, json.RawMessage(ansBytes)); err != nil {
+						fmt.Println("[-] send answer failed:", err)
+						continue
+					}
+					fmt.Println("[+] auto-answered offer from", offer.SenderId)
+
+				case relay.TypeAnswer:
+					peerID, err := api.FinishHandshake(env.Data)
+					if err != nil {
+						fmt.Println("[-] finish handshake failed:", err)
+					} else {
+						fmt.Println("[+] session established:", peerID)
+					}
+
+				case relay.TypeMessage:
+					senderID, pt, err := api.Decrypt(base64.StdEncoding.EncodeToString(env.Data))
+					if err != nil {
+						fmt.Println("[-] decrypt failed:", err)
+						continue
+					}
+					mailbox[senderID] = append([]ChatMessage{{Body: pt}}, mailbox[senderID]...)
+					fmt.Printf("[+] New message received from %s! Check your mailbox.\n", senderID)
 				}
 			}
-			return nil
-		},
-	}
-}
 
-func dispatch(ctx context.Context, engine *core.Engine, r relay.Relay, selfPriv ed25519.PrivateKey, body []byte) error {
-	var env relay.Envelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return fmt.Errorf("unmarshal envelope: %w", err)
-	}
-	switch env.Type {
-	case relay.TypeOffer:
-		return handleOffer(ctx, engine, r, selfPriv, env.Data)
-	case relay.TypeAnswer:
-		return handleAnswer(engine, env.Data)
-	case relay.TypeMessage:
-		return handleMessage(engine, env.Data)
-	default:
-		return fmt.Errorf("unknown envelope type: %q", env.Type)
-	}
-}
+		case "send":
+			if activeClient == nil {
+				fmt.Println("[-] init or load an identity first")
+				continue
+			}
+			if len(parts) < 3 {
+				fmt.Println("usage: send <peer> <msg>")
+				continue
+			}
+			peer := parts[1]
+			msg := strings.Join(parts[2:], " ")
 
-func handleOffer(ctx context.Context, engine *core.Engine, r relay.Relay, selfPriv ed25519.PrivateKey, data json.RawMessage) error {
-	var offer Client.HandshakeOffer
-	if err := json.Unmarshal(data, &offer); err != nil {
-		return fmt.Errorf("unmarshal offer: %w", err)
-	}
+			cipherBytes, err := api.Encrypt(peer, msg)
+			if err != nil {
+				fmt.Println("[-] encrypt failed:", err)
+				continue
+			}
 
-	answerBytes, err := engine.AcceptOffer(data)
-	if err != nil {
-		return fmt.Errorf("accept offer: %w", err)
-	}
+			recipientPub, err := ed25519PubFromID(peer)
+			if err != nil {
+				fmt.Println("[-] invalid peer ID:", err)
+				continue
+			}
+			if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, recipientPub, relay.TypeMessage, cipherBytes); err != nil {
+				fmt.Println("[-] send failed:", err)
+				continue
+			}
 
-	// offer.IdPub is the raw Ed25519 pub bytes the worker expects directly.
-	if err := sendEnvelope(ctx, r, selfPriv, offer.IdPub, relay.TypeAnswer, answerBytes); err != nil {
-		return fmt.Errorf("send answer: %w", err)
-	}
-	return nil
-}
+			mailbox[peer] = append([]ChatMessage{{Body: "Me: " + msg, IsRead: true}}, mailbox[peer]...)
+			fmt.Println("[+] sent to", peer)
 
-func handleAnswer(engine *core.Engine, data json.RawMessage) error {
-	peerID, err := engine.FinishHandshake(data)
-	if err != nil {
-		return fmt.Errorf("finish handshake: %w", err)
-	}
-	fmt.Printf("✓ Secure session established with: %s\n", peerID)
-	return nil
-}
+		case "mailbox":
+			if len(parts) == 1 {
+				if len(mailbox) == 0 {
+					fmt.Println("[i] mailbox empty.")
+					continue
+				}
+				for peer, msgs := range mailbox {
+					unread := 0
+					for _, m := range msgs {
+						if !m.IsRead {
+							unread++
+						}
+					}
+					fmt.Printf("  %s  (%d unread)\n", peer, unread)
+				}
+				continue
+			}
 
-func handleMessage(engine *core.Engine, data json.RawMessage) error {
-	msgB64 := base64.StdEncoding.EncodeToString(data)
-	senderID, pt, err := engine.Decrypt(msgB64)
-	if err != nil {
-		return fmt.Errorf("decrypt: %w", err)
-	}
-	fmt.Printf("\n[Received from %s]: %s\n", senderID, pt)
-	return nil
-}
+			target := parts[1]
+			fullPeer := target
+			for peer := range mailbox {
+				if strings.HasPrefix(peer, target) {
+					fullPeer = peer
+					break
+				}
+			}
 
-// sendEnvelope wraps data in a relay.Envelope of the given type and sends it
-// to recipientPubKey. Sender-auth signing happens inside r.Send itself (see
-// relay.Relay.Send's doc comment) — this just passes the identity key
-// through, it does not build SenderAuth here.
-func sendEnvelope(ctx context.Context, r relay.Relay, senderPriv ed25519.PrivateKey, recipientPubKey []byte, t relay.Type, data json.RawMessage) error {
-	env := relay.Envelope{Type: t, Data: data}
-	payload, err := json.Marshal(env)
-	if err != nil {
-		return fmt.Errorf("marshal envelope: %w", err)
-	}
+			msgs, ok := mailbox[fullPeer]
+			if !ok {
+				fmt.Println("[-] no messages from", target)
+				continue
+			}
+			fmt.Printf("=== messages with %s ===\n", fullPeer)
+			for i, m := range msgs {
+				mark := " "
+				if !m.IsRead {
+					mark = "*"
+					mailbox[fullPeer][i].IsRead = true
+				}
+				fmt.Printf("[%s] %s\n", mark, m.Body)
+			}
 
-	return r.Send(ctx, recipientPubKey, payload, senderPriv)
+		case "help":
+			fmt.Println("=== NexTalk (Worker Transport) ===")
+			fmt.Println("Commands:")
+			fmt.Println("  init                  Create a new identity")
+			fmt.Println("  load <id>             Load an existing identity")
+			fmt.Println("  connect <peer>        Start a secure session")
+			fmt.Println("  listen                Receive offers and messages")
+			fmt.Println("  send <peer> <msg>     Send an encrypted message")
+			fmt.Println("  mailbox [peer]        Show mailbox or conversation")
+			fmt.Println("  exit                  Quit")
+		case "clear":
+			fmt.Print("\033[H\033[2J")
+			fmt.Println("=== NexTalk (Worker Transport) ===")
+			fmt.Println("init | load <id> | connect <peer> | listen | send <peer> <msg> | mailbox [peer] | clear | exit")
+
+		case "exit":
+			fmt.Println("[+] bye.")
+			return
+
+		default:
+			fmt.Println("[-] unknown command")
+		}
+
+	}
 }
