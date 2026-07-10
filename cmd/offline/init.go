@@ -20,7 +20,6 @@ func (c *Command) InitCommand() *cobra.Command {
 
 func RunInit(engine *core.Engine) error {
 	client := engine.Initialize()
-	fmt.Println("\n[Received from init command]")
 	response := InitResponse{
 		ID: client.Id,
 	}
