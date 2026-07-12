@@ -1,13 +1,13 @@
+// cmd/root.go
 package cmd
 
 import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
-	cmdoffline "github.com/erfanheydarzade/NexTalk/cmd/offline"
-	cmdproxy "github.com/erfanheydarzade/NexTalk/cmd/proxy"
 	cmdgui "github.com/erfanheydarzade/NexTalk/cmd/shell"
-	cmdworker "github.com/erfanheydarzade/NexTalk/cmd/worker"
+	_ "github.com/erfanheydarzade/NexTalk/cmd/transports" // triggers all transport init()s
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/registry"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )
@@ -27,8 +27,9 @@ func init() {
 	cfg := config.Load()
 	engine := core.NewEngine(&Client.Client{})
 
-	cmdoffline.Register(rootCmd, engine)
-	cmdworker.Register(rootCmd, engine, cfg)
-	cmdproxy.Register(rootCmd, engine, cfg)
+	for _, entry := range registry.CLITransports() {
+		entry.CLI.RegisterCLI(rootCmd, engine, cfg)
+	}
+
 	cmdgui.Register(rootCmd, engine)
 }

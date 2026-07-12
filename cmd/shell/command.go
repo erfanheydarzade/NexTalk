@@ -8,13 +8,11 @@ import (
 
 func Register(parent *cobra.Command, engine *core.Engine) {
 	cfg := config.Load()
-	cmd := &cobra.Command{
+	parent.AddCommand(&cobra.Command{
 		Use:   "shell",
-		Short: "Start NexTalk GUI mode",
+		Short: "Start NexTalk interactive shell",
 		Run: func(cmd *cobra.Command, args []string) {
 			RunGUI(engine, cfg)
 		},
-	}
-
-	parent.AddCommand(cmd)
+	})
 }

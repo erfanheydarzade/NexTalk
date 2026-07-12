@@ -13,6 +13,7 @@ import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/registry"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"github.com/mr-tron/base58"
@@ -28,6 +29,13 @@ const (
 	Red     = "\033[31m"
 	Magenta = "\033[35m"
 	Blue    = "\033[34m"
+)
+const (
+	reset = "\033[0m"
+	bold  = "\033[1m"
+	cyan  = "\033[36m"
+	green = "\033[32m"
+	red   = "\033[31m"
 )
 
 func clearScreen() { fmt.Print("\033[H\033[2J") }
@@ -414,77 +422,79 @@ func (t *WorkerTransport) Help() {
 // 4. Main Runtime & TUI Loop
 // ---------------------------------------------------------
 
-func printMainMenu() {
+func printMainMenu(entries []registry.Entry) {
 	clearScreen()
-	fmt.Printf("%s%s╔════════════════════════════════════════╗%s\n", Bold, Cyan, Reset)
-	fmt.Printf("%s%s║               NexTalk CLI              ║%s\n", Bold, Cyan, Reset)
-	fmt.Printf("%s%s╚════════════════════════════════════════╝%s\n\n", Bold, Cyan, Reset)
-	fmt.Println("  1. Offline Mode  (Manual Cryptography Lab)")
-	fmt.Println("  2. Worker Mode   (Cloud Relay)")
-	fmt.Println("  3. Proxy Mode    (Anonymized Routing)")
-	fmt.Println("  4. Exit")
-	fmt.Println()
+	fmt.Printf("%s%s╔════════════════════════════════════════╗%s\n", bold, cyan, reset)
+	fmt.Printf("%s%s║               NexTalk CLI              ║%s\n", bold, cyan, reset)
+	fmt.Printf("%s%s╚════════════════════════════════════════╝%s\n\n", bold, cyan, reset)
+
+	for i, e := range entries {
+		if e.GUI != nil {
+			fmt.Printf("  %d. %s\n", i+1, e.GUI.MenuLabel())
+		}
+	}
+	fmt.Printf("  %d. Exit\n\n", len(entries)+1)
 }
 
+// ── TUI loop ──────────────────────────────────────────────────────────────────
+
+// RunGUI is the top-level interactive shell. It reads all GUITransports from
+// the registry — it never names a specific transport.
 func RunGUI(api *core.Engine, cfg config.Config) {
 	scanner := bufio.NewScanner(os.Stdin)
-
-	state := &RuntimeState{
-		API:     api,
-		Config:  cfg,
-		Ctx:     context.Background(),
-		Mailbox: make(map[string][]ChatMessage),
-	}
-
-	transports := map[string]Transport{
-		// "1": &OfflineTransport{}, // Implement similarly
-		"2": &WorkerTransport{},
-		//"3": &ProxyTransport{}, // Implement similarly
-	}
+	state := registry.NewState(api, cfg)
+	guiEntries := registry.GUITransports()
+	exitChoice := fmt.Sprintf("%d", len(guiEntries)+1)
 
 	for {
-		printMainMenu()
-		fmt.Printf("%sSelect Transport ❯%s ", Bold, Reset)
+		printMainMenu(guiEntries)
+		fmt.Printf("%sSelect ❯%s ", bold, reset)
 
 		if !scanner.Scan() {
 			break
 		}
 		choice := strings.TrimSpace(scanner.Text())
 
-		if choice == "4" || choice == "exit" {
-			printInfo("Shutting down NexTalk. Goodbye!")
+		if choice == exitChoice || choice == "exit" || choice == "q" {
+			fmt.Printf("  %s[i]%s Goodbye!\n", cyan, reset)
 			break
 		}
 
-		t, ok := transports[choice]
-		if !ok {
+		// Map 1-based choice to entry index.
+		idx := -1
+		for i := range guiEntries {
+			if choice == fmt.Sprintf("%d", i+1) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
 			continue
 		}
 
+		t := guiEntries[idx].GUI
 		if err := t.Init(state); err != nil {
-			printError("Failed to init transport: %v", err)
+			printError("Failed to initialise transport: %v", err)
 			continue
 		}
 
-		// Transport Sub-shell Prompt Loop
+		// Sub-shell loop for the chosen transport.
 		for {
 			fmt.Printf("\n%s╭─[%snextalk:%s%s]\n╰─❯%s ",
-				Cyan, Green, t.Name(), Cyan, Reset)
+				cyan, green, t.Name(), cyan, reset)
 
 			if !scanner.Scan() {
 				return
 			}
-
 			input := strings.TrimSpace(scanner.Text())
 			if input == "" {
 				continue
 			}
-
 			parts := strings.Fields(input)
 			cmd, args := parts[0], parts[1:]
 
-			if keepRunning := t.Execute(state, cmd, args); !keepRunning {
-				break // return to main menu
+			if !t.Execute(state, cmd, args) {
+				break // back to main menu
 			}
 		}
 	}
