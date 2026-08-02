@@ -1,157 +1,197 @@
+// Package core implements the NexTalk handshake protocol.
+//
+// Dependency order (innermost → outermost):
+//
+//	crypto  ←  core/engine  ←  client
+//
+// Engine is a *stateless* protocol processor. It owns no identity, holds no
+// sessions, and never touches the file system. All mutable state lives in
+// client.Client; the Engine only knows about the crypto package below it.
+//
+// Callers pass in key material and get back new/mutated state to persist.
 package core
 
 import (
-	"encoding/base64"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber768"
-	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/crypto"
 	"github.com/mr-tron/base58"
+	"golang.org/x/crypto/ed25519"
 )
 
-type Engine struct {
-	Client *Client.Client
+// Engine is a stateless protocol processor.
+// Create one with NewEngine(); it is safe to reuse and share across goroutines
+// (it has no mutable fields).
+type Engine struct{}
+
+// NewEngine returns a ready Engine.
+func NewEngine() *Engine { return &Engine{} }
+
+// newPeer creates a fresh ephemeral SecurePeer seeded with the caller's
+// long-term identity keys. All short-term key material (X25519, DH, Kyber768)
+// is newly generated on each call.
+//
+// This is an internal helper; only CreateOffer and AcceptOffer call it.
+func (e *Engine) newPeer(
+	expectedPeerHash []byte,
+	idPriv ed25519.PrivateKey,
+	idPub ed25519.PublicKey,
+	dilPriv, dilPub []byte,
+) *crypto.SecurePeer {
+	privX, pubX := crypto.GenerateX25519KeyPair()
+	dhPrivX, dhPubX := crypto.GenerateX25519KeyPair()
+
+	pqcPubObj, pqcPrivObj, err := kyber768.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("kyber768 keygen: %v", err))
+	}
+	pqcPubBytes, _ := pqcPubObj.MarshalBinary()
+	pqcPrivBytes, _ := pqcPrivObj.MarshalBinary()
+
+	return &crypto.SecurePeer{
+		ExpectedPeerHash: expectedPeerHash,
+		IdentityPrivate:  idPriv,
+		IdentityPublic:   idPub,
+		Private:          privX,
+		Public:           pubX,
+		PqcPrivateKey:    pqcPrivBytes,
+		PqcPublicKey:     pqcPubBytes,
+		DhPrivate:        dhPrivX,
+		DhPublic:         dhPubX,
+		PqcSignPrivate:   dilPriv,
+		PqcSignPublic:    dilPub,
+		SkippedMessages:  make(map[string][]byte),
+		SeenOffers:       make(map[string]bool),
+	}
 }
 
-// NewEngine initializes the API with a client
-func NewEngine(c *Client.Client) *Engine {
-	return &Engine{Client: c}
-}
+// ── Step 1 ───────────────────────────────────────────────────────────────────
 
-// CreateOffer (Step 1) - Generates a Base64 string to send to a friend.
-func (of *Engine) CreateOffer(peerId string) ([]byte, error) {
-	newPeer := Client.NewSecurePeer(
-		nil,
-		of.Client.IdentityPrivate,
-		of.Client.IdentityPublic,
-		of.Client.DilithiumPrivate,
-		of.Client.DilithiumPublic,
-	)
+// CreateOffer builds a signed offer payload for the initiator to send to a peer.
+//
+// Returns:
+//   - peer: the ephemeral session state; the caller MUST store this as
+//     sessions["pending_<peerId>"] (and sessions["pending"]) before the
+//     answer arrives, so FinishHandshake can retrieve it.
+//   - offerJSON: the wire bytes to forward to the peer.
+func (e *Engine) CreateOffer(
+	myId string,
+	idPriv ed25519.PrivateKey,
+	idPub ed25519.PublicKey,
+	dilPriv, dilPub []byte,
+	peerId string,
+) (peer *crypto.SecurePeer, offerJSON []byte, err error) {
+	peer = e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
 
-	// Migrated to Base58
 	peerIdBytes, err := base58.Decode(peerId)
 	if err != nil {
-		return nil, fmt.Errorf("invalid peer ID encoding: %w", err)
+		return nil, nil, fmt.Errorf("invalid peer ID encoding: %w", err)
 	}
 
 	offerId := crypto.GenerateOfferID()
-	offer := Client.HandshakeOffer{
-		SenderId:      of.Client.Id,
+	offer := HandShakeOffer{
+		SenderId:      myId,
 		RecipientId:   peerIdBytes,
 		OfferID:       offerId,
-		IdPub:         newPeer.IdentityPublicBytes(),
-		Pub:           newPeer.PublicBytes(),
-		DhPub:         newPeer.DhPubBytes(),
-		KyberPub:      newPeer.PqcPubBytes(),
-		DilithiumPub:  newPeer.PqcSignPublic,
-		Sign:          newPeer.GetSign(offerId, peerIdBytes),
-		DilithiumSign: newPeer.GetDilithiumSign(offerId, peerIdBytes),
+		IdPub:         peer.IdentityPublicBytes(),
+		Pub:           peer.PublicBytes(),
+		DhPub:         peer.DhPubBytes(),
+		KyberPub:      peer.PqcPubBytes(),
+		DilithiumPub:  peer.PqcSignPublic,
+		Sign:          peer.GetSign(offerId, peerIdBytes),
+		DilithiumSign: peer.GetDilithiumSign(offerId, peerIdBytes),
 	}
 
-	if peerId != "" {
-		of.Client.Sessions["pending_"+peerId] = newPeer
-	}
-	of.Client.Sessions["pending"] = newPeer
-
-	Client.SaveClient(of.Client)
-	return json.Marshal(offer)
+	offerJSON, err = json.Marshal(offer)
+	return peer, offerJSON, err
 }
 
-// AcceptOffer (Step 2) - Processes a friend's offer and generates an Answer JSON.
+// ── Step 2 ───────────────────────────────────────────────────────────────────
+
+// AcceptOffer validates the initiator's offer, performs the responder-side KEM
+// encapsulation, runs Handshake, and returns an answer for the initiator.
 //
-// KEM flow (responder side):
-//  1. Unmarshal the initiator's Kyber768 public key from the offer.
-//  2. Encapsulate → produces (ciphertext, sharedSecret).
-//  3. ciphertext is sent back inside HandshakeAnswer so the initiator can decapsulate.
-//  4. sharedSecret is fed into Handshake() for session key derivation.
-func (of *Engine) AcceptOffer(offerBytes []byte) ([]byte, error) {
-	var offer Client.HandshakeOffer
-	if err := json.Unmarshal(offerBytes, &offer); err != nil {
-		return nil, fmt.Errorf("unmarshal offer: %w", err)
+// existingSessions is the caller's current session map, used only for replay
+// detection (SeenOffers) — it is never modified here; the caller stores the
+// returned peer.
+//
+// Returns:
+//   - senderID: the initiator's peer ID; the caller stores peer under this key.
+//   - peer:     the fully initialised responder session.
+//   - answerJSON: the wire bytes to send back to the initiator.
+func (e *Engine) AcceptOffer(
+	myId string,
+	idPriv ed25519.PrivateKey,
+	idPub ed25519.PublicKey,
+	dilPriv, dilPub []byte,
+	existingSessions map[string]*crypto.SecurePeer,
+	offerBytes []byte,
+) (senderID string, peer *crypto.SecurePeer, answerJSON []byte, err error) {
+	var offer HandShakeOffer
+	if err = json.Unmarshal(offerBytes, &offer); err != nil {
+		return "", nil, nil, fmt.Errorf("unmarshal offer: %w", err)
 	}
-
 	if len(offer.OfferID) == 0 {
-		return nil, fmt.Errorf("missing offer id")
+		return "", nil, nil, fmt.Errorf("missing offer id")
+	}
+	if base58.Encode(offer.RecipientId) != myId {
+		return "", nil, nil, fmt.Errorf("offer not intended for this peer")
 	}
 
-	// Migrated to Base58
-	if base58.Encode(offer.RecipientId) != of.Client.Id {
-		return nil, fmt.Errorf("offer not intended for this peer")
+	// Identity binding: sender ID must be derivable from the supplied public keys.
+	if crypto.DerivePeerID(offer.IdPub, offer.DilithiumPub) != offer.SenderId {
+		return "", nil, nil, fmt.Errorf("sender ID spoofing detected: keys do not match claimed ID")
 	}
 
-	derivedSenderId := crypto.DerivePeerID(offer.IdPub, offer.DilithiumPub)
-	if derivedSenderId != offer.SenderId {
-		return nil, fmt.Errorf("sender ID spoofing detected: id does not match identity public key")
-	}
-
-	// Migrated to Base58
+	// Replay detection.
 	offerIDKey := base58.Encode(offer.OfferID)
-
-	if existingPeer, exists := of.Client.Sessions[offer.SenderId]; exists {
-		if existingPeer.SeenOffers != nil && existingPeer.SeenOffers[offerIDKey] {
-			return nil, fmt.Errorf("offer replay detected for peer %s", offer.SenderId)
+	if existing, exists := existingSessions[offer.SenderId]; exists {
+		if existing.SeenOffers != nil && existing.SeenOffers[offerIDKey] {
+			return "", nil, nil, fmt.Errorf("offer replay detected for peer %s", offer.SenderId)
 		}
 	}
 
-	responderPeer := Client.NewSecurePeer(
-		nil,
-		of.Client.IdentityPrivate,
-		of.Client.IdentityPublic,
-		of.Client.DilithiumPrivate,
-		of.Client.DilithiumPublic,
-	)
+	responderPeer := e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
 
-	if existingPeer, exists := of.Client.Sessions[offer.SenderId]; exists && existingPeer.SeenOffers != nil {
-		for k, v := range existingPeer.SeenOffers {
+	// Carry forward seen-offer history so re-keying doesn't lose replay protection.
+	if existing, exists := existingSessions[offer.SenderId]; exists && existing.SeenOffers != nil {
+		for k, v := range existing.SeenOffers {
 			responderPeer.SeenOffers[k] = v
 		}
 	}
-
 	responderPeer.SeenOffers[offerIDKey] = true
 
+	// KEM: encapsulate against initiator's Kyber768 public key.
 	scheme := kyber768.Scheme()
 	remoteKyberPub, err := scheme.UnmarshalBinaryPublicKey(offer.KyberPub)
 	if err != nil {
-		return nil, fmt.Errorf("unmarshal kyber public key: %w", err)
+		return "", nil, nil, fmt.Errorf("unmarshal kyber public key: %w", err)
 	}
-
 	ciphertext, sharedSecret, err := scheme.Encapsulate(remoteKyberPub)
 	if err != nil {
-		return nil, fmt.Errorf("kyber encapsulate: %w", err)
+		return "", nil, nil, fmt.Errorf("kyber encapsulate: %w", err)
 	}
 
-	// Migrated to Base58
-	clientIdByte, _ := base58.Decode(of.Client.Id)
-
-	if err := responderPeer.Handshake(
-		offer.IdPub,
-		offer.Pub,
-		offer.DhPub,
-		offer.KyberPub,
-		offer.DilithiumPub,
-		offer.Sign,
-		offer.DilithiumSign,
-		sharedSecret,
-		offer.OfferID,
-		clientIdByte,
+	myIdBytes, _ := base58.Decode(myId)
+	if err = responderPeer.Handshake(
+		offer.IdPub, offer.Pub, offer.DhPub,
+		offer.KyberPub, offer.DilithiumPub,
+		offer.Sign, offer.DilithiumSign,
+		sharedSecret, offer.OfferID, myIdBytes,
 	); err != nil {
-		return nil, fmt.Errorf("handshake (responder): %w", err)
+		return "", nil, nil, fmt.Errorf("handshake (responder): %w", err)
 	}
 
-	of.Client.Sessions[offer.SenderId] = responderPeer
-	Client.SaveClient(of.Client)
-
-	// Migrated to Base58
 	senderIdBytes, err := base58.Decode(offer.SenderId)
 	if err != nil {
-		return nil, fmt.Errorf("invalid sender id encoding: %w", err)
+		return "", nil, nil, fmt.Errorf("invalid sender id encoding: %w", err)
 	}
 
-	answer := Client.HandshakeAnswer{
-		SenderId:        of.Client.Id,
+	answer := HandShakeAnswer{
+		SenderId:        myId,
 		IdPub:           responderPeer.IdentityPublicBytes(),
 		Pub:             responderPeer.PublicBytes(),
 		DhPub:           responderPeer.DhPubBytes(),
@@ -161,125 +201,62 @@ func (of *Engine) AcceptOffer(offerBytes []byte) ([]byte, error) {
 		Sign:            responderPeer.GetSign(offer.OfferID, senderIdBytes),
 		DilithiumSign:   responderPeer.GetDilithiumSign(offer.OfferID, senderIdBytes),
 		OfferID:         offer.OfferID,
-		RecipientId:     clientIdByte,
+		RecipientId:     myIdBytes,
 	}
 
-	return json.Marshal(answer)
+	answerJSON, err = json.Marshal(answer)
+	return offer.SenderId, responderPeer, answerJSON, err
 }
 
-// FinishHandshake (Step 3) - Finalizes the session on the initiator's side.
+// ── Step 3 ───────────────────────────────────────────────────────────────────
+
+// FinishHandshake completes the initiator-side handshake.
 //
 // KEM flow (initiator side):
-//  1. Receive the responder's HandshakeAnswer (contains PqcCiphertext).
-//  2. Decapsulate using our own Kyber768 private key → recovers sharedSecret.
-//  3. Feed sharedSecret into Handshake() — must match the responder's value.
-func (of *Engine) FinishHandshake(answerBytes []byte) (string, error) {
-	var answer Client.HandshakeAnswer
-	if err := json.Unmarshal(answerBytes, &answer); err != nil {
+//  1. Decapsulate the responder's KyberCiphertext using our Kyber768 private key.
+//  2. Feed the recovered sharedSecret into Handshake — must match the responder's value.
+//
+// pendingPeer is modified in place (Handshake writes session keys into it).
+// The caller is responsible for moving it from sessions["pending_<id>"] to sessions[peerID].
+//
+// Returns peerID so the caller knows which key to use in the sessions map.
+func (e *Engine) FinishHandshake(
+	myId string,
+	pendingPeer *crypto.SecurePeer,
+	answerBytes []byte,
+) (peerID string, err error) {
+	var answer HandShakeAnswer
+	if err = json.Unmarshal(answerBytes, &answer); err != nil {
 		return "", fmt.Errorf("unmarshal answer: %w", err)
 	}
-
-	peer, ok := of.Client.Sessions["pending_"+answer.SenderId]
-	if !ok {
-		peer, ok = of.Client.Sessions["pending"]
-		if !ok {
-			return "", fmt.Errorf("no pending session found for %s", answer.SenderId)
-		}
-	}
-
 	if len(answer.KyberCiphertext) == 0 {
 		return "", fmt.Errorf("answer missing PQC ciphertext")
 	}
 
+	// KEM: recover the shared secret the responder encapsulated for us.
 	scheme := kyber768.Scheme()
-
-	kyberPriv, err := scheme.UnmarshalBinaryPrivateKey(peer.PqcPrivateKey)
+	kyberPriv, err := scheme.UnmarshalBinaryPrivateKey(pendingPeer.PqcPrivateKey)
 	if err != nil {
 		return "", fmt.Errorf("unmarshal kyber private key: %w", err)
 	}
-
 	sharedSecret, err := scheme.Decapsulate(kyberPriv, answer.KyberCiphertext)
 	if err != nil {
 		return "", fmt.Errorf("kyber decapsulate: %w", err)
 	}
 
-	// Migrated to Base58
-	myIdBytes, err := base58.Decode(of.Client.Id)
+	myIdBytes, err := base58.Decode(myId)
 	if err != nil {
 		return "", fmt.Errorf("decode client id: %w", err)
 	}
 
-	if err := peer.Handshake(
-		answer.IdPub,
-		answer.Pub,
-		answer.DhPub,
-		answer.KyberPub,
-		answer.DilithiumPub,
-		answer.Sign,
-		answer.DilithiumSign,
-		sharedSecret,
-		answer.OfferID,
-		myIdBytes,
+	if err = pendingPeer.Handshake(
+		answer.IdPub, answer.Pub, answer.DhPub,
+		answer.KyberPub, answer.DilithiumPub,
+		answer.Sign, answer.DilithiumSign,
+		sharedSecret, answer.OfferID, myIdBytes,
 	); err != nil {
 		return "", fmt.Errorf("handshake (initiator): %w", err)
 	}
 
-	delete(of.Client.Sessions, "pending")
-	delete(of.Client.Sessions, "pending_"+answer.SenderId)
-	of.Client.Sessions[answer.SenderId] = peer
-	Client.SaveClient(of.Client)
-
 	return answer.SenderId, nil
-}
-
-// Encrypt (Step 4) - Wraps a message for a peer
-func (of *Engine) Encrypt(peerID, message string) ([]byte, error) {
-	session, ok := of.Client.Sessions[peerID]
-	if !ok {
-		return nil, fmt.Errorf("session not found")
-	}
-
-	cipher := session.Encrypt(of.Client.Id, []byte(message))
-	Client.SaveClient(of.Client)
-
-	return cipher, nil
-}
-
-// Decrypt (Step 5) - Decodes a Base64 message
-func (of *Engine) Decrypt(payloadB64 string) (string, string, error) {
-	payloadBytes, err := base64.StdEncoding.DecodeString(payloadB64)
-	if err != nil {
-		return "", "", err
-	}
-
-	senderID, pt, err := of.Client.Decrypt(payloadBytes)
-	if err != nil {
-		return "", "", err
-	}
-	Client.SaveClient(of.Client)
-	return senderID, string(pt), nil
-}
-
-func (of *Engine) Initialize() *Client.Client {
-	of.Client = Client.NewClient()
-	Client.SaveClient(of.Client)
-	return of.Client
-}
-
-func (of *Engine) LoadClient(id string) (*Client.Client, error) {
-	filename := fmt.Sprintf("%s.json", id)
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	var cl Client.Client
-	if err := json.Unmarshal(data, &cl); err != nil {
-		return nil, err
-	}
-	of.Client = &cl
-	return &cl, nil
-}
-
-func (of *Engine) SaveClient() {
-	Client.SaveClient(of.Client)
 }
