@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 
-	Client "github.com/erfanheydarzade/NexTalk/client"
+	Core "github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/crypto"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	transport "github.com/erfanheydarzade/NexTalk/transport"
@@ -40,14 +40,14 @@ func (a *Adapter) Send(_ context.Context, recipientPubKey []byte, payload []byte
 	// Route to the correct proxy bucket based on envelope type.
 	switch env.Type {
 	case relay.TypeOffer:
-		var offer Client.HandshakeOffer
+		var offer Core.HandShakeOffer
 		if err := json.Unmarshal(env.Data, &offer); err != nil {
 			return err
 		}
 		return a.inner.WritePayload(recipientID, "offers", offer)
 
 	case relay.TypeAnswer:
-		var answer Client.HandshakeAnswer
+		var answer Core.HandShakeAnswer
 		if err := json.Unmarshal(env.Data, &answer); err != nil {
 			return err
 		}
