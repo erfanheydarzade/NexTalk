@@ -1,31 +1,14 @@
-package crypto
+package client
 
-type HandshakeOffer struct {
-	SenderId      string `json:"senderId"`
-	RecipientId   []byte `json:"recipientId"`
-	OfferID       []byte `json:"offerID"`
-	IdPub         []byte `json:"idPub"`         // Ed25519 pub
-	Pub           []byte `json:"pub"`           // X25519 pub
-	DhPub         []byte `json:"dhPub"`         // ratchet DH pub
-	KyberPub      []byte `json:"kyberPub"`      // Kyber768 pub
-	DilithiumPub  []byte `json:"dilithiumPub"`  // Dilithium3 pub
-	Sign          []byte `json:"sign"`          // Ed25519 signature
-	DilithiumSign []byte `json:"dilithiumSign"` // ← Dilithium3 signature
-}
+// HandshakeOffer and HandshakeAnswer have been moved to the core package as
+// unexported types (handshakeOffer / handshakeAnswer).  They are internal
+// protocol details of the Engine and should never be needed by callers
+// outside core — all public APIs consume/produce raw JSON bytes.
+//
+// Response is kept here because it is used by cmd-layer handlers that already
+// import the client package.  If you prefer, move it to core.Response.
 
-type HandshakeAnswer struct {
-	SenderId        string `json:"senderId"`
-	RecipientId     []byte `json:"recipientId"`
-	OfferID         []byte `json:"offerID"`
-	IdPub           []byte `json:"idPub"`
-	Pub             []byte `json:"pub"`
-	DhPub           []byte `json:"dhPub"`
-	KyberPub        []byte `json:"kyberPub"`
-	KyberCiphertext []byte `json:"kyberCiphertext"`
-	DilithiumPub    []byte `json:"dilithiumPub"`
-	Sign            []byte `json:"sign"`
-	DilithiumSign   []byte `json:"dilithiumSign"`
-}
+// Response is the standard envelope returned by cmd-layer handlers.
 type Response struct {
 	Status  string      `json:"status"`
 	Data    interface{} `json:"data,omitempty"`
