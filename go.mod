@@ -3,6 +3,7 @@ module github.com/erfanheydarzade/NexTalk
 go 1.25.0
 
 require (
+	github.com/chzyer/readline v1.5.1
 	github.com/cloudflare/circl v1.6.3
 	github.com/joho/godotenv v1.5.1
 	github.com/mr-tron/base58 v1.3.0
