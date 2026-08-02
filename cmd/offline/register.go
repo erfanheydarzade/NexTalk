@@ -4,8 +4,12 @@ package offline
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+
+	Client "github.com/erfanheydarzade/NexTalk/client"
+	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
@@ -36,7 +40,7 @@ type OfflineGUITransport struct {
 }
 
 func (t *OfflineGUITransport) Name() string      { return "offline" }
-func (t *OfflineGUITransport) MenuLabel() string { return "1. Offline Mode  (Manual Cryptography Lab)" }
+func (t *OfflineGUITransport) MenuLabel() string { return "Offline Mode  (Manual Cryptography Lab)" }
 
 func (t *OfflineGUITransport) Init(state *registry.State) error {
 	fmt.Printf("\n  \033[1m\033[34m❖ Offline Mode — no network required ❖\033[0m\n\n")
@@ -47,7 +51,7 @@ func (t *OfflineGUITransport) Init(state *registry.State) error {
 func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []string) bool {
 	switch cmd {
 	case "init":
-		state.ActiveClient = state.API.Initialize()
+		state.ActiveClient = Client.NewClient()
 		fmt.Printf("\033[32m  [✓]\033[0m Identity: %s\n", state.ActiveClient.Id)
 
 	case "load":
@@ -55,7 +59,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Println("  Usage: load <id>")
 			return true
 		}
-		cl, err := state.API.LoadClient(args[0])
+		cl, err := Client.LoadClient(args[0])
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Load failed: %v\n", err)
 			return true
@@ -64,7 +68,16 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		fmt.Printf("\033[32m  [✓]\033[0m Loaded: %s\n", cl.Id)
 
 	case "offer":
-		bytes, err := state.API.CreateOffer("")
+		if len(args) < 1 {
+			fmt.Println("  Usage: load <id>")
+			return true
+		}
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+
+		bytes, err := state.ActiveClient.CreateOffer(args[0])
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Offer failed: %v\n", err)
 			return true
@@ -72,6 +85,10 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		fmt.Printf("\033[36m  [i]\033[0m OFFER JSON:\n%s\n", string(bytes))
 
 	case "accept":
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
 		if t.scanner == nil {
 			t.scanner = bufio.NewScanner(os.Stdin)
 		}
@@ -79,7 +96,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		t.scanner.Scan()
 		offerRaw := strings.TrimSpace(t.scanner.Text())
 
-		ansBytes, err := state.API.AcceptOffer([]byte(offerRaw))
+		ansBytes, err := state.ActiveClient.AcceptOffer([]byte(offerRaw))
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Accept failed: %v\n", err)
 			return true
@@ -87,6 +104,10 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		fmt.Printf("\033[32m  [✓]\033[0m ANSWER JSON:\n%s\n", string(ansBytes))
 
 	case "finish":
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
 		if t.scanner == nil {
 			t.scanner = bufio.NewScanner(os.Stdin)
 		}
@@ -94,7 +115,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		t.scanner.Scan()
 		ansRaw := strings.TrimSpace(t.scanner.Text())
 
-		peerID, err := state.API.FinishHandshake([]byte(ansRaw))
+		peerID, err := state.ActiveClient.FinishHandshake([]byte(ansRaw))
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Finish failed: %v\n", err)
 			return true
@@ -106,9 +127,33 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Println("  Usage: encrypt <peer> <msg>")
 			return true
 		}
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+
 		peer := args[0]
-		msg := strings.Join(args[1:], " ")
-		cipher, err := state.API.Encrypt(peer, msg)
+		message := strings.Join(args[1:], " ")
+
+		var plaintext []byte
+		var err error
+
+		if message != "" {
+			// Text codec from CLI
+			plaintext = []byte(message)
+		} else {
+			// Binary/text codec from stdin
+			plaintext, err = io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Println("failed to read stdin: %w", err)
+			}
+
+			if len(plaintext) == 0 {
+				fmt.Println("no codec provided")
+			}
+		}
+
+		cipher, err := state.ActiveClient.Encrypt(peer, plaintext)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Encrypt failed: %v\n", err)
 			return true
@@ -120,7 +165,17 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Println("  Usage: decrypt <ciphertext-json>")
 			return true
 		}
-		senderID, plain, err := state.API.Decrypt(strings.Join(args, " "))
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+
+		ciphertext, err := Encoding.DecodeBase64(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m Invalid ciphertext: %v\n", err)
+			return true
+		}
+		senderID, plain, err := state.ActiveClient.Decrypt(ciphertext)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Decrypt failed: %v\n", err)
 			return true
