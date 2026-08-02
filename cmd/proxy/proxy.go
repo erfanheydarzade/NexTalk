@@ -2,14 +2,14 @@ package proxy
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
-	"github.com/erfanheydarzade/NexTalk/core"
+	Core "github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
 
 	// Assuming you placed your new storage code here:
@@ -21,7 +21,7 @@ type PayloadEnvelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
-func RunWorker(api *core.Engine, cfg config.Config) {
+func RunWorker(api *Core.Engine, cfg config.Config) {
 	activeClient := &Client.Client{}
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -48,7 +48,7 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 		switch cmd {
 
 		case "init":
-			activeClient = api.Initialize()
+			activeClient = Client.NewClient()
 			fmt.Println("ID:", activeClient.Id)
 			// Because S3/Proxy doesn't require "creating" an identity session
 			// like the old worker, we just use the generated ID as our inbox name.
@@ -60,7 +60,7 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 				continue
 			}
 
-			cl, err := api.LoadClient(parts[1])
+			cl, err := Client.LoadClient(parts[1])
 			if err != nil {
 				fmt.Println("load failed:", err)
 				continue
@@ -81,7 +81,7 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 
 			peerID := parts[1]
 
-			offerBytes, err := api.CreateOffer(peerID)
+			offerBytes, err := activeClient.CreateOffer(peerID)
 			if err != nil {
 				fmt.Println("offer failed:", err)
 				continue
@@ -120,10 +120,10 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 
 				switch env.Type {
 				case "offer":
-					handleOffer(api, store, env.Data)
+					handleOffer(activeClient, store, env.Data)
 
 				case "answer":
-					peerID, err := api.FinishHandshake(env.Data)
+					peerID, err := activeClient.FinishHandshake(env.Data)
 					if err == nil {
 						fmt.Println("session established with:", peerID)
 					} else {
@@ -131,9 +131,8 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 					}
 
 				case "message":
-					// Decrypt still expects Base64 for now as per your original design
-					msgB64 := base64.StdEncoding.EncodeToString(env.Data)
-					senderID, pt, err := api.Decrypt(msgB64)
+
+					senderID, pt, err := activeClient.Decrypt(env.Data)
 					if err == nil {
 						fmt.Printf("[msg] From %s: %s\n", senderID, pt)
 					} else {
@@ -149,9 +148,26 @@ func RunWorker(api *core.Engine, cfg config.Config) {
 			}
 
 			peer := parts[1]
-			msg := strings.Join(parts[2:], " ")
+			message := strings.Join(parts[2:], " ")
+			var plaintext []byte
+			var err error
 
-			cipherBytes, err := api.Encrypt(peer, msg)
+			if message != "" {
+				// Text codec from CLI
+				plaintext = []byte(message)
+			} else {
+				// Binary/text codec from stdin
+				plaintext, err = io.ReadAll(os.Stdin)
+				if err != nil {
+					fmt.Println("failed to read stdin: %w", err)
+				}
+
+				if len(plaintext) == 0 {
+					fmt.Println("no codec provided")
+				}
+			}
+
+			cipherBytes, err := activeClient.Encrypt(peer, plaintext)
 			if err != nil {
 				fmt.Println("encrypt failed:", err)
 				continue
@@ -184,11 +200,12 @@ func send(store *storage.ProxyChatStorage, peerID string, env PayloadEnvelope) {
 }
 
 // Updated handleOffer to use ProxyChatStorage
-func handleOffer(api *core.Engine, store *storage.ProxyChatStorage, data json.RawMessage) {
-	var offer Client.HandshakeOffer
+func handleOffer(cl *Client.Client, store *storage.ProxyChatStorage, data json.RawMessage) {
+	var offer Core.HandShakeOffer
+
 	_ = json.Unmarshal(data, &offer)
 
-	answerBytes, err := api.AcceptOffer(data)
+	answerBytes, err := cl.AcceptOffer(data)
 	if err != nil {
 		fmt.Println("accept offer failed:", err)
 		return
