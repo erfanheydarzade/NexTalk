@@ -2,7 +2,6 @@
 package worker
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,7 +41,7 @@ func (w *workerCLITransport) RegisterCLI(parent *cobra.Command, engine *core.Eng
 type WorkerGUITransport struct{}
 
 func (t *WorkerGUITransport) Name() string      { return "worker" }
-func (t *WorkerGUITransport) MenuLabel() string { return "2. Worker Mode   (Cloud Relay)" }
+func (t *WorkerGUITransport) MenuLabel() string { return "Worker Mode   (Cloud Relay)" }
 
 func (t *WorkerGUITransport) Init(state *registry.State) error {
 	fmt.Printf("\n\033[1m\033[34m❖ Worker Mode Engaged (Cloud Relay) ❖\033[0m\n\n")
@@ -65,7 +64,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 	switch cmd {
 
 	case "init":
-		state.ActiveClient = state.API.Initialize()
+		state.ActiveClient = Client.NewClient()
 		fmt.Printf("\033[32m  [✓]\033[0m Identity: \033[1m%s\033[0m\n", state.ActiveClient.Id)
 
 		pubHex, err := state.Worker.Register(state.Ctx, state.ActiveClient.IdentityPrivate)
@@ -83,7 +82,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			fmt.Println("  Usage: load <id>")
 			return true
 		}
-		cl, err := state.API.LoadClient(args[0])
+		cl, err := Client.LoadClient(args[0])
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Load failed: %v\n", err)
 			return true
@@ -108,7 +107,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 		peerID := args[0]
 
-		offerBytes, err := state.API.CreateOffer(peerID)
+		offerBytes, err := state.ActiveClient.CreateOffer(peerID)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Offer creation failed: %v\n", err)
 			return true
@@ -120,9 +119,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			return true
 		}
 
-		env := relay.Envelope{Type: relay.TypeOffer, Data: json.RawMessage(offerBytes)}
-		payload, _ := json.Marshal(env)
-		if err := state.Worker.Send(state.Ctx, pub, payload, state.ActiveClient.IdentityPrivate); err != nil {
+		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeOffer, offerBytes); err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Send failed: %v\n", err)
 			return true
 		}
@@ -145,12 +142,11 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 
 		for _, m := range msgs {
-			body := tryDecode(m.Body)
-			var env relay.Envelope
-			if err := json.Unmarshal(body, &env); err != nil {
+			t, data, err := workerrelay.UnwrapEnvelope(m.Body)
+			if err != nil {
 				continue
 			}
-			dispatchGUI(state, env)
+			dispatchGUI(state, t, data)
 		}
 
 	case "send", "encrypt":
@@ -159,9 +155,15 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			return true
 		}
 		peer := args[0]
-		msg := strings.Join(args[1:], " ")
+		message := strings.Join(args[1:], " ")
 
-		cipherBytes, err := state.API.Encrypt(peer, msg)
+		plaintext, err := readInput(message)
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
+		}
+
+		cipherBytes, err := state.ActiveClient.Encrypt(peer, plaintext)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Encryption failed: %v\n", err)
 			return true
@@ -173,9 +175,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			return true
 		}
 
-		env := relay.Envelope{Type: relay.TypeMessage, Data: json.RawMessage(cipherBytes)}
-		payload, _ := json.Marshal(env)
-		if err := state.Worker.Send(state.Ctx, pub, payload, state.ActiveClient.IdentityPrivate); err != nil {
+		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeMessage, cipherBytes); err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Send failed: %v\n", err)
 			return true
 		}
@@ -184,7 +184,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			state.Mailbox = make(map[string][]registry.ChatMessage)
 		}
 		state.Mailbox[peer] = append(
-			[]registry.ChatMessage{{Body: "Me: " + msg, IsRead: true}},
+			[]registry.ChatMessage{{Body: "Me: " + message, IsRead: true}},
 			state.Mailbox[peer]...,
 		)
 		fmt.Printf("\033[32m  [✓]\033[0m Message sent to %s\n", shortID(peer))
@@ -276,17 +276,17 @@ func shortID(id string) string {
 	return id[:6] + "..." + id[len(id)-4:]
 }
 
-// dispatchGUI routes a decoded envelope and updates state in place.
-func dispatchGUI(state *registry.State, env relay.Envelope) {
-	switch env.Type {
+// dispatchGUI routes a decoded (type, data) envelope pair and updates state in place.
+func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
+	switch t {
 
 	case relay.TypeOffer:
-		var offer Client.HandshakeOffer
-		if err := json.Unmarshal(env.Data, &offer); err != nil {
+		var offer core.HandShakeOffer
+		if err := json.Unmarshal(data, &offer); err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Bad offer payload: %v\n", err)
 			return
 		}
-		ansBytes, err := state.API.AcceptOffer(env.Data)
+		ansBytes, err := state.ActiveClient.AcceptOffer(data)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Accept offer failed: %v\n", err)
 			return
@@ -296,16 +296,14 @@ func dispatchGUI(state *registry.State, env relay.Envelope) {
 			fmt.Printf("\033[31m  [✗]\033[0m Invalid sender ID: %v\n", err)
 			return
 		}
-		ansEnv := relay.Envelope{Type: relay.TypeAnswer, Data: json.RawMessage(ansBytes)}
-		payload, _ := json.Marshal(ansEnv)
-		if err := state.Worker.Send(state.Ctx, pub, payload, state.ActiveClient.IdentityPrivate); err != nil {
+		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeAnswer, ansBytes); err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Send answer failed: %v\n", err)
 			return
 		}
 		fmt.Printf("\033[32m  [✓]\033[0m Auto-answered offer from %s\n", shortID(offer.SenderId))
 
 	case relay.TypeAnswer:
-		peerID, err := state.API.FinishHandshake(env.Data)
+		peerID, err := state.ActiveClient.FinishHandshake(data)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Handshake finish failed: %v\n", err)
 			return
@@ -313,9 +311,7 @@ func dispatchGUI(state *registry.State, env relay.Envelope) {
 		fmt.Printf("\033[32m  [✓]\033[0m Session established with: %s\n", shortID(peerID))
 
 	case relay.TypeMessage:
-		senderID, pt, err := state.API.Decrypt(
-			base64.StdEncoding.EncodeToString(env.Data),
-		)
+		senderID, pt, err := state.ActiveClient.Decrypt(data)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Decrypt failed: %v\n", err)
 			return
@@ -324,12 +320,12 @@ func dispatchGUI(state *registry.State, env relay.Envelope) {
 			state.Mailbox = make(map[string][]registry.ChatMessage)
 		}
 		state.Mailbox[senderID] = append(
-			[]registry.ChatMessage{{Body: pt, IsRead: false}},
+			[]registry.ChatMessage{{Body: string(pt), IsRead: false}},
 			state.Mailbox[senderID]...,
 		)
 		fmt.Printf("\033[35m  [✉]\033[0m New message from %s — check 'mailbox'.\n", shortID(senderID))
 
 	default:
-		fmt.Printf("\033[33m  [!]\033[0m Unknown envelope type: %q\n", env.Type)
+		fmt.Printf("\033[33m  [!]\033[0m Unknown envelope type: %d\n", t)
 	}
 }

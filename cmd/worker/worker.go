@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	client "github.com/erfanheydarzade/NexTalk/client"
+	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
@@ -30,7 +30,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 		return
 	}
 
-	var activeClient *client.Client
+	var activeClient *Client.Client
 	mailbox := make(map[string][]ChatMessage)
 
 	fmt.Println("=== NexTalk (Worker Transport) ===")
@@ -54,7 +54,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 		switch cmd {
 
 		case "init":
-			activeClient = api.Initialize()
+			activeClient = Client.NewClient()
 			fmt.Println("[+] identity:", activeClient.Id)
 
 			pubHex, err := w.Register(ctx, activeClient.IdentityPrivate)
@@ -69,7 +69,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 				fmt.Println("usage: load <id>")
 				continue
 			}
-			cl, err := api.LoadClient(parts[1])
+			cl, err := Client.LoadClient(parts[1])
 			if err != nil {
 				fmt.Println("[-] load failed:", err)
 				continue
@@ -94,7 +94,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 			}
 			peerID := parts[1]
 
-			offerBytes, err := api.CreateOffer(peerID)
+			offerBytes, err := activeClient.CreateOffer(peerID)
 			if err != nil {
 				fmt.Println("[-] offer failed:", err)
 				continue
@@ -105,7 +105,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 				fmt.Println("[-] invalid peer ID:", err)
 				continue
 			}
-			if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, recipientPub, relay.TypeOffer, json.RawMessage(offerBytes)); err != nil {
+			if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, recipientPub, relay.TypeOffer, offerBytes); err != nil {
 				fmt.Println("[-] send offer failed:", err)
 				continue
 			}
@@ -128,18 +128,17 @@ func RunWorker(api *core.Engine, workerURL string) {
 			}
 
 			for _, m := range msgs {
-				body := tryDecode(m.Body)
-				var env relay.Envelope
-				if err := json.Unmarshal(body, &env); err != nil {
+				t, data, err := workerrelay.UnwrapEnvelope(m.Body)
+				if err != nil {
 					continue
 				}
 
-				switch env.Type {
+				switch t {
 				case relay.TypeOffer:
-					var offer client.HandshakeOffer
-					_ = json.Unmarshal(env.Data, &offer)
+					var offer core.HandShakeOffer
+					_ = json.Unmarshal(data, &offer)
 
-					ansBytes, err := api.AcceptOffer(env.Data)
+					ansBytes, err := activeClient.AcceptOffer(data)
 					if err != nil {
 						fmt.Println("[-] accept offer failed:", err)
 						continue
@@ -150,14 +149,14 @@ func RunWorker(api *core.Engine, workerURL string) {
 						fmt.Println("[-] invalid sender ID:", err)
 						continue
 					}
-					if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, senderPub, relay.TypeAnswer, json.RawMessage(ansBytes)); err != nil {
+					if err := sendEnvelope(ctx, w, activeClient.IdentityPrivate, senderPub, relay.TypeAnswer, ansBytes); err != nil {
 						fmt.Println("[-] send answer failed:", err)
 						continue
 					}
 					fmt.Println("[+] auto-answered offer from", offer.SenderId)
 
 				case relay.TypeAnswer:
-					peerID, err := api.FinishHandshake(env.Data)
+					peerID, err := activeClient.FinishHandshake(data)
 					if err != nil {
 						fmt.Println("[-] finish handshake failed:", err)
 					} else {
@@ -165,12 +164,12 @@ func RunWorker(api *core.Engine, workerURL string) {
 					}
 
 				case relay.TypeMessage:
-					senderID, pt, err := api.Decrypt(base64.StdEncoding.EncodeToString(env.Data))
+					senderID, pt, err := activeClient.Decrypt(data)
 					if err != nil {
 						fmt.Println("[-] decrypt failed:", err)
 						continue
 					}
-					mailbox[senderID] = append([]ChatMessage{{Body: pt}}, mailbox[senderID]...)
+					mailbox[senderID] = append([]ChatMessage{{Body: string(pt)}}, mailbox[senderID]...)
 					fmt.Printf("[+] New message received from %s! Check your mailbox.\n", senderID)
 				}
 			}
@@ -185,9 +184,15 @@ func RunWorker(api *core.Engine, workerURL string) {
 				continue
 			}
 			peer := parts[1]
-			msg := strings.Join(parts[2:], " ")
+			message := strings.Join(parts[2:], " ")
 
-			cipherBytes, err := api.Encrypt(peer, msg)
+			plaintext, err := readInput(message)
+			if err != nil {
+				fmt.Println("[-]", err)
+				continue
+			}
+
+			cipherBytes, err := activeClient.Encrypt(peer, plaintext)
 			if err != nil {
 				fmt.Println("[-] encrypt failed:", err)
 				continue
@@ -203,7 +208,12 @@ func RunWorker(api *core.Engine, workerURL string) {
 				continue
 			}
 
-			mailbox[peer] = append([]ChatMessage{{Body: "Me: " + msg, IsRead: true}}, mailbox[peer]...)
+			mailbox[peer] = append([]ChatMessage{
+				{
+					Body:   "Me: " + base64.StdEncoding.EncodeToString(cipherBytes),
+					IsRead: true,
+				},
+			}, mailbox[peer]...)
 			fmt.Println("[+] sent to", peer)
 
 		case "mailbox":

@@ -7,41 +7,45 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
+	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"github.com/spf13/cobra"
 )
 
+// ListenCommand builds the `listen` subcommand.
 func (c *Command) ListenCommand() *cobra.Command {
 	var localPeer string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "listen",
 		Short: "Poll the worker for incoming offers, answers, and messages",
+		// We own all error reporting (human vs json) — cobra must stay silent.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.RunListen(
-				cmd.Context(),
-				localPeer,
-			)
+			err := c.RunListen(cmd.Context(), localPeer, format)
+			return reportAndExit(err, format)
 		},
 	}
 
-	cmd.Flags().StringVarP(
-		&localPeer,
-		"id",
-		"i",
-		"",
-		"Local peer ID",
-	)
+	cmd.Flags().StringVarP(&localPeer, "id", "i", "", "Local peer ID")
+	cmd.Flags().StringVar(&format, "format", formatHuman, "Output format: human, json")
 
 	_ = cmd.MarkFlagRequired("id")
 
 	return cmd
 }
 
-func (c *Command) RunListen(ctx context.Context, localPeer string) error {
+func (c *Command) RunListen(ctx context.Context, localPeer string, format string) error {
+	if err := validateFormat(format); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
@@ -50,7 +54,7 @@ func (c *Command) RunListen(ctx context.Context, localPeer string) error {
 		return err
 	}
 
-	cl, err := c.engine.LoadClient(localPeer)
+	cl, err := Client.LoadClient(localPeer)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
@@ -66,6 +70,7 @@ func (c *Command) RunListen(ctx context.Context, localPeer string) error {
 
 	for _, msg := range msgs {
 		event, err := dispatch(
+			*cl,
 			ctx,
 			c.engine,
 			r,
@@ -87,17 +92,42 @@ func (c *Command) RunListen(ctx context.Context, localPeer string) error {
 		}
 	}
 
-	output, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal response: %w", err)
+	if format == formatJSON {
+		return writeJSON(response)
 	}
 
-	fmt.Println(string(output))
+	printListenEventsHuman(response.Events)
 	return nil
+}
+
+// printListenEventsHuman renders events the way an interactive user wants
+// them — one blocked per event, no JSON — instead of forcing json+jq on
+// anyone who isn't scripting against this command.
+func printListenEventsHuman(events []ListenEvent) {
+	if len(events) == 0 {
+		fmt.Println("[i] No new events.")
+		return
+	}
+
+	for _, e := range events {
+		switch e.Type {
+		case "offer":
+			fmt.Printf("[+] Offer received from %s (answer sent)\n", e.Peer)
+		case "answer":
+			fmt.Printf("[+] Session established with %s\n", e.Peer)
+		case "message":
+			fmt.Printf("[+] Message from %s (%s):\n%s\n", e.Sender, e.Encoding, e.Message)
+		case "error":
+			fmt.Printf("[✗] %s\n", e.Message)
+		default:
+			fmt.Printf("[?] Unknown event: %s\n", e.Type)
+		}
+	}
 }
 
 // dispatch routes an incoming raw envelope body and returns a single ListenEvent.
 func dispatch(
+	cl Client.Client,
 	ctx context.Context,
 	engine *core.Engine,
 	r relay.Relay,
@@ -105,40 +135,42 @@ func dispatch(
 	body []byte,
 ) (*ListenEvent, error) {
 
-	var env relay.Envelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, fmt.Errorf("unmarshal envelope: %w", err)
+	t, data, err := workerrelay.UnwrapEnvelope(body)
+	if err != nil {
+		return nil, fmt.Errorf("unwrap envelope: %w", err)
 	}
 
-	switch env.Type {
+	switch t {
 	case relay.TypeOffer:
-		return handleOffer(ctx, engine, r, selfPriv, env.Data)
+		return handleOffer(cl, ctx, engine, r, selfPriv, data)
 
 	case relay.TypeAnswer:
-		return handleAnswer(engine, env.Data)
+		return handleAnswer(cl, engine, data)
 
 	case relay.TypeMessage:
-		return handleMessage(engine, env.Data)
+		return handleMessage(cl, engine, data)
 
 	default:
-		return nil, fmt.Errorf("unknown envelope type: %q", env.Type)
+		return nil, fmt.Errorf("unknown envelope type: %d", t)
 	}
 }
 
 func handleOffer(
+	cl Client.Client,
 	ctx context.Context,
 	engine *core.Engine,
 	r relay.Relay,
 	selfPriv ed25519.PrivateKey,
-	data json.RawMessage,
+	data []byte,
+
 ) (*ListenEvent, error) {
 
-	var offer Client.HandshakeOffer
+	var offer core.HandShakeOffer
 	if err := json.Unmarshal(data, &offer); err != nil {
 		return nil, fmt.Errorf("unmarshal offer: %w", err)
 	}
 
-	answerBytes, err := engine.AcceptOffer(data)
+	answerBytes, err := cl.AcceptOffer(data)
 	if err != nil {
 		return nil, fmt.Errorf("accept offer: %w", err)
 	}
@@ -167,11 +199,12 @@ func handleOffer(
 }
 
 func handleAnswer(
+	cl Client.Client,
 	engine *core.Engine,
-	data json.RawMessage,
+	data []byte,
 ) (*ListenEvent, error) {
 
-	peerID, err := engine.FinishHandshake(data)
+	peerID, err := cl.FinishHandshake(data)
 	if err != nil {
 		return nil, fmt.Errorf("finish handshake: %w", err)
 	}
@@ -189,20 +222,28 @@ func handleAnswer(
 }
 
 func handleMessage(
+	cl Client.Client,
 	engine *core.Engine,
-	data json.RawMessage,
+	data []byte,
 ) (*ListenEvent, error) {
 
-	msgB64 := base64.StdEncoding.EncodeToString(data)
-
-	senderID, plaintext, err := engine.Decrypt(msgB64)
+	senderID, plaintext, err := cl.Decrypt(data)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 
-	return &ListenEvent{
-		Type:    "message",
-		Sender:  senderID,
-		Message: plaintext,
-	}, nil
+	event := &ListenEvent{
+		Type:   "message",
+		Sender: senderID,
+	}
+
+	if utf8.Valid(plaintext) {
+		event.Encoding = "utf-8"
+		event.Message = string(plaintext)
+	} else {
+		event.Encoding = "base64"
+		event.Message = base64.StdEncoding.EncodeToString(plaintext)
+	}
+
+	return event, nil
 }

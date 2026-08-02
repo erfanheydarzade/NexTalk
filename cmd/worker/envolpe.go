@@ -3,14 +3,21 @@ package worker
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 
 	base58 "github.com/mr-tron/base58"
 
+	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 )
+
+// readInput is a back-compat wrapper for interactive callers (the REPL in
+// worker.go and the GUI transport in register.go) that only ever supply an
+// inline message with no file/encoding flags of their own. Cobra-based
+// commands should call readPayload directly so they can expose -f/--in.
+func readInput(message string) ([]byte, error) {
+	return readPayload(message, "", string(codec.EncodingRaw))
+}
 
 // peerIDByteLen is the expected decoded length of a base58 peer ID:
 // Ed25519 public key (32 bytes) + SHA3-256(Dilithium public key) (32 bytes).
@@ -38,20 +45,11 @@ func sendEnvelope(
 	senderPriv ed25519.PrivateKey,
 	recipientPubKey []byte,
 	t relay.Type,
-	data json.RawMessage,
+	data []byte,
 ) error {
-	env := relay.Envelope{Type: t, Data: data}
-	payload, err := json.Marshal(env)
-	if err != nil {
-		return fmt.Errorf("marshal envelope: %w", err)
-	}
-	return r.Send(ctx, recipientPubKey, payload, senderPriv)
-}
+	payload := make([]byte, 1+len(data))
+	payload[0] = byte(t)
+	copy(payload[1:], data)
 
-func tryDecode(b []byte) []byte {
-	d, err := base64.StdEncoding.DecodeString(string(b))
-	if err != nil {
-		return b
-	}
-	return d
+	return r.Send(ctx, recipientPubKey, payload, senderPriv)
 }

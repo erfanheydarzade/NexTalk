@@ -2,66 +2,83 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	Client "github.com/erfanheydarzade/NexTalk/client"
+	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	"github.com/spf13/cobra"
 )
 
+// EncryptCommand builds the `worker encrypt` subcommand.
 func (c *Command) EncryptCommand() *cobra.Command {
 	var localPeer string
 	var remotePeer string
 	var message string
+	var inputFile string
+	var inputEncoding string
+	var outputEncoding string
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "encrypt",
-		Short: "Encrypt and Encrypt a message",
+		Short: "Encrypt a message or file and dispatch it via the worker",
+		// We own all error reporting (human vs json) — cobra must stay silent.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.RunEncrypt(
+			err := c.RunEncrypt(
 				cmd.Context(),
-				localPeer,
-				remotePeer,
-				message,
+				EncryptWorkerOptions{
+					LocalPeer:      localPeer,
+					RemotePeer:     remotePeer,
+					Message:        message,
+					InputFile:      inputFile,
+					InputEncoding:  inputEncoding,
+					OutputEncoding: outputEncoding,
+					Format:         format,
+				},
 			)
+			return reportAndExit(err, format)
 		},
 	}
 
-	cmd.Flags().StringVarP(
-		&localPeer,
-		"id",
-		"i",
-		"",
-		"Local peer ID",
-	)
-	cmd.Flags().StringVarP(
-		&remotePeer,
-		"remotePeer",
-		"r",
-		"",
-		"Remote peer ID",
-	)
-	cmd.Flags().StringVarP(
-		&message,
-		"message",
-		"m",
-		"",
-		"Message to encrypt",
-	)
+	cmd.Flags().StringVarP(&localPeer, "id", "i", "", "Local peer ID")
+	cmd.Flags().StringVarP(&remotePeer, "remotePeer", "r", "", "Remote peer ID")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "Message to encrypt (inline)")
+	cmd.Flags().StringVarP(&inputFile, "file", "f", "", "Path to plaintext input file")
+
+	cmd.Flags().StringVar(&inputEncoding, "in", string(codec.EncodingRaw), "Input encoding (raw,b64,hex)")
+	cmd.Flags().StringVar(&outputEncoding, "out", "b64", "Encoding used to echo the sent ciphertext")
+	cmd.Flags().StringVar(&format, "format", formatHuman, "Output format: human, json")
 
 	_ = cmd.MarkFlagRequired("id")
 	_ = cmd.MarkFlagRequired("remotePeer")
-	_ = cmd.MarkFlagRequired("message")
 
 	return cmd
 }
 
-func (c *Command) RunEncrypt(
-	ctx context.Context,
-	localPeer string,
-	remotePeer string,
-	message string,
-) error {
+// EncryptWorkerOptions bundles everything RunEncrypt needs.
+type EncryptWorkerOptions struct {
+	LocalPeer      string
+	RemotePeer     string
+	Message        string
+	InputFile      string
+	InputEncoding  string
+	OutputEncoding string
+	Format         string
+}
+
+func (c *Command) RunEncrypt(ctx context.Context, opts EncryptWorkerOptions) error {
+	if err := validateEncoding(opts.InputEncoding); err != nil {
+		return err
+	}
+	if err := validateEncoding(opts.OutputEncoding); err != nil {
+		return err
+	}
+	if err := validateFormat(opts.Format); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -71,17 +88,22 @@ func (c *Command) RunEncrypt(
 		return err
 	}
 
-	cl, err := c.engine.LoadClient(localPeer)
+	cl, err := Client.LoadClient(opts.LocalPeer)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
 
-	peerPubKey, err := ed25519PubFromID(remotePeer)
+	peerPubKey, err := ed25519PubFromID(opts.RemotePeer)
 	if err != nil {
 		return fmt.Errorf("invalid peer ID: %w", err)
 	}
 
-	cipherBytes, err := c.engine.Encrypt(remotePeer, message)
+	plaintext, err := readPayload(opts.Message, opts.InputFile, opts.InputEncoding)
+	if err != nil {
+		return err
+	}
+
+	cipherBytes, err := cl.Encrypt(opts.RemotePeer, plaintext)
 	if err != nil {
 		return fmt.Errorf("encrypt: %w", err)
 	}
@@ -94,17 +116,24 @@ func (c *Command) RunEncrypt(
 		relay.TypeMessage,
 		cipherBytes,
 	); err != nil {
-		return fmt.Errorf("Encrypt message: %w", err)
+		return fmt.Errorf("send message: %w", err)
 	}
 
-	output, err := json.Marshal(EncryptResponse{
-		Peer: remotePeer,
-	})
+	encoded, err := codec.EncodeOutput(opts.OutputEncoding, cipherBytes)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to encode output as %s: %w", opts.OutputEncoding, err)
 	}
 
-	fmt.Println(string(output))
+	response := EncryptResponse{
+		Peer:     opts.RemotePeer,
+		Encoding: opts.OutputEncoding,
+		Message:  string(encoded),
+	}
 
+	if opts.Format == formatJSON {
+		return writeJSON(response)
+	}
+
+	fmt.Printf("[✓] Encrypted %d bytes and sent\n\nTo:\n%s\n", len(plaintext), opts.RemotePeer)
 	return nil
 }
