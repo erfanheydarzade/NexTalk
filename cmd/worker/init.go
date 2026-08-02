@@ -3,23 +3,38 @@ package worker
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
+	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/spf13/cobra"
 )
 
+// InitCommand builds the `init` subcommand.
 func (c *Command) InitCommand() *cobra.Command {
-	return &cobra.Command{
+	var format string
+
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize identity and register a mailbox with the worker",
+		// We own all error reporting (human vs json) — cobra must stay silent.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return c.RunInit(cmd.Context())
+			err := c.RunInit(cmd.Context(), format)
+			return reportAndExit(err, format)
 		},
 	}
+
+	cmd.Flags().StringVar(&format, "format", formatHuman, "Output format: human, json")
+
+	return cmd
 }
 
-func (c *Command) RunInit(ctx context.Context) error {
+func (c *Command) RunInit(ctx context.Context, format string) error {
+	if err := validateFormat(format); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
@@ -28,7 +43,7 @@ func (c *Command) RunInit(ctx context.Context) error {
 		return err
 	}
 
-	cl := c.engine.Initialize()
+	cl := client.NewClient()
 
 	pubHex, err := r.Register(ctx, cl.IdentityPrivate)
 	if err != nil {
@@ -44,16 +59,12 @@ func (c *Command) RunInit(ctx context.Context) error {
 		)
 	}
 
-	response := InitResponse{
-		ID: cl.Id,
+	response := InitResponse{ID: cl.Id}
+
+	if format == formatJSON {
+		return writeJSON(response)
 	}
 
-	output, err := json.Marshal(response)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println(string(output))
-
+	fmt.Printf("[✓] Identity created and registered\n\nID:\n%s\n", cl.Id)
 	return nil
 }

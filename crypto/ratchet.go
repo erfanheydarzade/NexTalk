@@ -24,7 +24,7 @@ func RatchetStep(ck []byte) (nextCk, mk []byte) {
 
 	nextCk = material[:32]
 	mk = material[32:]
-	return
+	return nextCk, mk
 }
 
 // IntToBytes converts an integer into a fixed-length big-endian byte slice.

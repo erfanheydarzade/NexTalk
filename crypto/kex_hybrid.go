@@ -7,14 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
-
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/cloudflare/circl/sign/dilithium/mode3"
+	"github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
@@ -27,7 +27,7 @@ var lowSecurity = false
 
 const maxSkip = 1000
 
-// keyLabel returns a short hex prefix for easy visual identification
+// keyLabel returns a short hex prefix for easy visual identification.
 func keyLabel(key []byte) string {
 	if key == nil {
 		return "<nil>"
@@ -36,14 +36,17 @@ func keyLabel(key []byte) string {
 }
 
 // SecureMessage represents an encrypted transport unit in the system.
+// Tag is intentionally excluded from the default bin.Marshal path (bin:"-")
+// so that hmacPayload() can produce a stable canonical form without any
+// nil-then-re-marshal tricks.
 type SecureMessage struct {
-	SenderID    string `json:"s"`
-	RatchetKey  []byte `json:"k"`
-	Nonce       int    `json:"n"`
-	Ciphertext  []byte `json:"c"`
-	Tag         []byte `json:"t,omitempty"`
-	RequestKey  []byte
-	AcceptedKey []byte
+	SenderID    string `bin:"s"`
+	RatchetKey  []byte `bin:"k"`
+	Nonce       int    `bin:"n"`
+	Ciphertext  []byte `bin:"c"`
+	Tag         []byte `bin:"-"` // transported separately; never in HMAC codec
+	RequestKey  []byte `bin:"rk"`
+	AcceptedKey []byte `bin:"ak"`
 }
 
 // SecurePeer holds the full cryptographic state of a participant.
@@ -149,7 +152,7 @@ func (sp *SecurePeer) GetSign(offerID []byte, recipientID []byte) []byte {
 	return ed25519.Sign(sp.IdentityPrivate, msg)
 }
 
-// GetDilithiumSign returns the post-quantum Dilithium3 signature
+// GetDilithiumSign returns the post-quantum Dilithium3 signature.
 func (sp *SecurePeer) GetDilithiumSign(offerID []byte, recipientID []byte) []byte {
 	msg := sp.buildSignMessage(offerID, recipientID)
 	return DilithiumSign(sp.PqcSignPrivate, msg)
@@ -225,7 +228,6 @@ func (sp *SecurePeer) GetTranscript(peerIdentityBytes, peerPublicBytes, peerDhPu
 
 	hashBuilder := sha3.New512()
 	hashBuilder.Write([]byte("ML-KEM-ECC-Hybrid-Transcript-v1"))
-
 	for _, h := range hashedItems {
 		hashBuilder.Write(h)
 	}
@@ -249,12 +251,13 @@ func (sp *SecurePeer) Handshake(
 	pqcSharedSecret, offerID, recipientId []byte,
 ) error {
 
-	// FIX: reject malformed-length Ed25519 public keys before calling
-	// ed25519.Verify, which panics (rather than returning false) on
-	// keys that aren't exactly ed25519.PublicKeySize bytes. Without this,
-	// a tampered/truncated IdPub field is a one-shot remote DoS.
+	// Reject malformed-length Ed25519 public keys before calling ed25519.Verify,
+	// which panics (rather than returning false) on keys that aren't exactly
+	// ed25519.PublicKeySize bytes. Without this, a tampered/truncated IdPub
+	// field is a one-shot remote DoS.
 	if len(peerIdentityBytes) != ed25519.PublicKeySize {
-		return fmt.Errorf("❌ invalid identity public key length: got %d, want %d", len(peerIdentityBytes), ed25519.PublicKeySize)
+		return fmt.Errorf("❌ invalid identity public key length: got %d, want %d",
+			len(peerIdentityBytes), ed25519.PublicKeySize)
 	}
 
 	msg := bytes.Join([][]byte{
@@ -266,26 +269,21 @@ func (sp *SecurePeer) Handshake(
 		offerID,
 	}, []byte{})
 
-	// 1. Verify Ed25519 (classical)
+	// 1. Verify Ed25519 (classical).
 	if !ed25519.Verify(peerIdentityBytes, msg, peerEd25519Sig) {
 		return fmt.Errorf("❌ invalid Ed25519 signature")
 	}
 
-	// 2. Verify Dilithium3 (post-quantum) — both must pass
+	// 2. Verify Dilithium3 (post-quantum) — both must pass.
 	if !DilithiumVerify(peerDilithiumPublicBytes, msg, peerDilithiumSig) {
 		return fmt.Errorf("❌ invalid Dilithium signature")
 	}
 
 	// 3. Verify ID binding (peer pinning), if pinned.
 	//
-	// FIX: removed the old second comparison that compared the raw
-	// 32-byte peerIdentityBytes directly against sp.ExpectedPeerHash.
 	// ExpectedPeerHash stores the base58-encoded DerivePeerID string
-	// (identity pub + sha3-256(dilithium pub)), which is a different
-	// length/format than a raw Ed25519 public key, so that comparison
-	// could never meaningfully succeed and just produced a confusing,
-	// effectively-dead security check. The single comparison below
-	// against the correctly-derived expectedID is the real check.
+	// (identity pub + sha3-256(dilithium pub)). We compare against the
+	// correctly-derived expectedID; the old raw-bytes comparison was dead code.
 	expectedID := DerivePeerID(peerIdentityBytes, peerDilithiumPublicBytes)
 	if sp.ExpectedPeerHash != nil &&
 		!bytes.Equal([]byte(expectedID), sp.ExpectedPeerHash) {
@@ -332,6 +330,11 @@ func (sp *SecurePeer) Handshake(
 
 	sp.SendNonce = 0
 	sp.RecvNonce = 0
+
+	if !sp.AmInitiator {
+		sp.pendingDhRatchet = true
+	}
+
 	return nil
 }
 
@@ -373,6 +376,19 @@ func (sp *SecurePeer) DhRatchet(remoteKey []byte) {
 	sp.pendingDhRatchet = true
 }
 
+// secureMessageHmacPayload encodes the tag-free canonical form used for HMAC
+// computation. Field order here is part of the wire contract — do not reorder.
+// RequestKey and AcceptedKey are deliberately excluded: they are handshake
+// fields transported outside the ratchet frame.
+func secureMessageHmacPayload(msg *SecureMessage) []byte {
+	return encoding.NewEncoder().
+		AddString("s", msg.SenderID).
+		Add("k", msg.RatchetKey).
+		Add("n", []byte(strconv.Itoa(msg.Nonce))).
+		Add("c", msg.Ciphertext).
+		Bytes()
+}
+
 // Encrypt produces an authenticated encrypted message using the send ratchet.
 func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 	var mk []byte
@@ -409,7 +425,9 @@ func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 
 	cipher, _ := chacha20poly1305.NewX(mk)
 	nonce := IntToBytes(sp.SendNonce, 24)
-	aad := append(currentDhPublic, IntToBytes(sp.SendNonce, 8)...)
+	aad := make([]byte, 0, len(currentDhPublic)+8)
+	aad = append(aad, currentDhPublic...)
+	aad = append(aad, IntToBytes(sp.SendNonce, 8)...)
 
 	ciphertext := cipher.Seal(nil, nonce, plaintext, aad)
 
@@ -420,14 +438,23 @@ func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 		Ciphertext: ciphertext,
 	}
 
-	tempJson, _ := json.Marshal(msg)
+	// Compute HMAC over the tag-free canonical payload.
+	canonical := secureMessageHmacPayload(&msg)
 	mac := hmac.New(sha3.New256, sp.HmacKey)
-	mac.Write(tempJson)
+	mac.Write(canonical)
 	msg.Tag = mac.Sum(nil)
 
-	finalJson, _ := json.Marshal(msg)
+	// Wire frame: same fields as canonical + tag appended last.
+	wire := encoding.NewEncoder().
+		AddString("s", msg.SenderID).
+		Add("k", msg.RatchetKey).
+		Add("n", []byte(strconv.Itoa(msg.Nonce))).
+		Add("c", msg.Ciphertext).
+		Add("t", msg.Tag).
+		Bytes()
+
 	sp.SendNonce++
-	return finalJson
+	return wire
 }
 
 func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPub []byte) bool {
@@ -437,7 +464,9 @@ func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPu
 	}
 
 	nonceBytes := IntToBytes(n, 24)
-	aad := append(dhPub, IntToBytes(n, 8)...)
+	aad := make([]byte, 0, len(dhPub)+8)
+	aad = append(aad, dhPub...)
+	aad = append(aad, IntToBytes(n, 8)...)
 
 	aadCopy := make([]byte, len(aad))
 	copy(aadCopy, aad)
@@ -447,27 +476,34 @@ func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPu
 }
 
 // Decrypt validates and decrypts an incoming SecureMessage.
-// Returns (senderID, plaintext, error)
+// Returns (senderID, plaintext, error).
 func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
-	var msg SecureMessage
-
-	if err := json.Unmarshal(payloadBytes, &msg); err != nil {
-		return "", nil, fmt.Errorf("error parsing JSON message: %v", err)
-	}
-
-	receivedTag := msg.Tag
-	msg.Tag = nil
-
-	payloadJson, err := json.Marshal(msg)
+	// Parse the binmodel wire frame.
+	fields, err := encoding.Decode(payloadBytes)
 	if err != nil {
-		return "", nil, fmt.Errorf("error re-marshaling message: %v", err)
+		return "", nil, fmt.Errorf("error parsing binmodel message: %v", err)
 	}
 
+	nonce, err := strconv.Atoi(string(fields["n"]))
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid nonce field: %v", err)
+	}
+
+	msg := SecureMessage{
+		SenderID:   string(fields["s"]),
+		RatchetKey: fields["k"],
+		Nonce:      nonce,
+		Ciphertext: fields["c"],
+		Tag:        fields["t"],
+	}
+
+	// Verify HMAC over the tag-free canonical form.
+	canonical := secureMessageHmacPayload(&msg)
 	mac := hmac.New(sha3.New256, sp.HmacKey)
-	mac.Write(payloadJson)
+	mac.Write(canonical)
 	calculatedTag := mac.Sum(nil)
 
-	if !hmac.Equal(receivedTag, calculatedTag) {
+	if !hmac.Equal(msg.Tag, calculatedTag) {
 		return "", nil, fmt.Errorf("invalid authentication tag ❌")
 	}
 
@@ -479,44 +515,48 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 
 		plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
 		return msg.SenderID, plaintext, err
+	}
 
-	} else {
-		skipKeyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(msg.RatchetKey), msg.Nonce)
-		if mk, exists := sp.SkippedMessages[skipKeyStr]; exists {
-			delete(sp.SkippedMessages, skipKeyStr)
-			plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
-			return msg.SenderID, plaintext, err
-		}
-
-		if sp.RemoteDhPublic == nil || !bytes.Equal(msg.RatchetKey, sp.RemoteDhPublic) {
-			if sp.SkippedMessages == nil {
-				sp.SkippedMessages = make(map[string][]byte)
-			}
-			sp.DhRatchet(msg.RatchetKey)
-		}
-
-		if msg.Nonce < sp.RecvNonce {
-			return "", nil, fmt.Errorf("replay attack or message too old (N=%d, expected >= %d)", msg.Nonce, sp.RecvNonce)
-		}
-
-		for sp.RecvNonce < msg.Nonce {
-			nextCk, mk := RatchetStep(sp.RecvCk)
-			sp.RecvCk = nextCk
-			keyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(sp.RemoteDhPublic), sp.RecvNonce)
-			if sp.SkippedMessages == nil {
-				sp.SkippedMessages = make(map[string][]byte)
-			}
-			sp.SkippedMessages[keyStr] = mk
-			sp.RecvNonce++
-		}
-
-		nextCk, mk := RatchetStep(sp.RecvCk)
-		sp.RecvCk = nextCk
-		sp.RecvNonce++
-
+	// Check skipped-message cache first.
+	skipKeyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(msg.RatchetKey), msg.Nonce)
+	if mk, exists := sp.SkippedMessages[skipKeyStr]; exists {
+		delete(sp.SkippedMessages, skipKeyStr)
 		plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
 		return msg.SenderID, plaintext, err
 	}
+
+	// DH ratchet step if the sender has rotated their key.
+	if sp.RemoteDhPublic == nil || !bytes.Equal(msg.RatchetKey, sp.RemoteDhPublic) {
+		if sp.SkippedMessages == nil {
+			sp.SkippedMessages = make(map[string][]byte)
+		}
+		sp.DhRatchet(msg.RatchetKey)
+	}
+
+	// Reject replays / messages from a past epoch.
+	if msg.Nonce < sp.RecvNonce {
+		return "", nil, fmt.Errorf("replay attack or message too old (N=%d, expected >= %d)",
+			msg.Nonce, sp.RecvNonce)
+	}
+
+	// Advance chain key, stashing keys for any gaps (out-of-order delivery).
+	for sp.RecvNonce < msg.Nonce {
+		nextCk, mk := RatchetStep(sp.RecvCk)
+		sp.RecvCk = nextCk
+		keyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(sp.RemoteDhPublic), sp.RecvNonce)
+		if sp.SkippedMessages == nil {
+			sp.SkippedMessages = make(map[string][]byte)
+		}
+		sp.SkippedMessages[keyStr] = mk
+		sp.RecvNonce++
+	}
+
+	nextCk, mk := RatchetStep(sp.RecvCk)
+	sp.RecvCk = nextCk
+	sp.RecvNonce++
+
+	plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
+	return msg.SenderID, plaintext, err
 }
 
 // DecryptWithKey performs AEAD decryption using a derived message key.
@@ -527,7 +567,10 @@ func (sp *SecurePeer) DecryptWithKey(mk []byte, n int, ciphertext []byte, dhPub 
 	}
 
 	nonceBytes := IntToBytes(n, 24)
-	aad := append(dhPub, IntToBytes(n, 8)...)
+
+	aad := make([]byte, 0, len(dhPub)+8)
+	aad = append(aad, dhPub...)
+	aad = append(aad, IntToBytes(n, 8)...)
 
 	plaintext, err := cipher.Open(nil, nonceBytes, ciphertext, aad)
 	if err != nil {

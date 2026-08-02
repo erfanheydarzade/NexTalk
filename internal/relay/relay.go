@@ -75,34 +75,64 @@ func BuildSenderAuth(senderPriv ed25519.PrivateKey, recipientMailboxID string, p
 // Relay interface — callers keep using Register/Send/Receive exactly as
 // before; this type only appears inside adapter.go's own cache.
 type MailboxCapability struct {
-	MailboxID    string `json:"mailbox_id"`
-	ReadSecret   string `json:"read_secret"`
-	ShardURL     string `json:"shard_url"`
-	ExpiresAt    int64  `json:"expires_at"`
-	TableVersion int    `json:"table_version"`
+	MailboxID  string `json:"mailbox_id"`
+	ReadSecret string `json:"read_secret"`
+	ShardURL   string `json:"shard_url"`
+	// ReplicaShardURLs is the full replica set for this mailbox, primary
+	// first (== ShardURL). Populated by Router /register as of v2.2;
+	// empty/nil on a v2.1 Router (REPLICATION_FACTOR effectively 1) —
+	// callers should treat that as "no fallback available" rather than
+	// an error.
+	ReplicaShardURLs []string `json:"replica_shard_urls,omitempty"`
+	ExpiresAt        int64    `json:"expires_at"`
+	TableVersion     int      `json:"table_version"`
 }
 
 // PeerResolution is what an Adapter caches internally, forever (per peer),
-// after resolving a contact's pubkey via Router /resolve. Also internal —
+// after resolving a contacts's pubkey via Router /resolve. Also internal —
 // not part of the public Relay interface.
 type PeerResolution struct {
-	MailboxID    string `json:"mailbox_id"`
-	ShardURL     string `json:"shard_url"`
-	TableVersion int    `json:"table_version"`
+	MailboxID string `json:"mailbox_id"`
+	ShardURL  string `json:"shard_url"`
+	// ReplicaShardURLs mirrors MailboxCapability.ReplicaShardURLs — see
+	// that field's comment. Same v2.1-Router caveat applies.
+	ReplicaShardURLs []string `json:"replica_shard_urls,omitempty"`
+	TableVersion     int      `json:"table_version"`
+}
+
+// ShardIdentity pairs a shard's public URL with the Ed25519 public key it
+// proved ownership of during self-registration (see Router
+// /register_shard). Pubkey is empty for shards that were added manually to
+// SHARD_URLS and never self-registered — those can still serve normal
+// client Send/Read traffic, they just can't be a verified origin for a
+// shard-to-shard /internal/replicate push (see shard/worker.js
+// handleReplicate), since there's no key on file to check that signature
+// against.
+type ShardIdentity struct {
+	URL    string `json:"url"`
+	Pubkey string `json:"pubkey"`
 }
 
 // RoutingTable is the signed, cacheable document served at
 // GET {router}/routing_table.json. Fetched rarely (on expiry or version
 // bump) by an Adapter internally.
 type RoutingTable struct {
-	Version          int      `json:"version"`
-	GeneratedAt      int64    `json:"generated_at"`
-	ExpiresAt        int64    `json:"expires_at"`
-	Algorithm        string   `json:"algorithm"`
-	ShardURLs        []string `json:"shard_urls"`
-	PriorShardCounts []int    `json:"prior_shard_counts"`
-	RouterPublicKey  string   `json:"router_public_key"`
-	Signature        string   `json:"signature"`
+	Version     int      `json:"version"`
+	GeneratedAt int64    `json:"generated_at"`
+	ExpiresAt   int64    `json:"expires_at"`
+	Algorithm   string   `json:"algorithm"`
+	ShardURLs   []string `json:"shard_urls"`
+	// Shards is ShardURLs paired with each shard's self-registered
+	// identity pubkey, when it has one. Added in v2.2 alongside
+	// replication; a v2.1 client that ignores this field still works fine.
+	Shards []ShardIdentity `json:"shards,omitempty"`
+	// ReplicationFactor is how many shards each mailbox's messages are
+	// spread across (see Router REPLICATION_FACTOR). 1 (or 0 from an old
+	// Router) means no replication — every mailbox has exactly one shard.
+	ReplicationFactor int    `json:"replication_factor,omitempty"`
+	PriorShardCounts  []int  `json:"prior_shard_counts"`
+	RouterPublicKey   string `json:"router_public_key"`
+	Signature         string `json:"signature"`
 }
 
 // Expired reports whether a cached RoutingTable should be refetched.
@@ -135,12 +165,12 @@ type Relay interface {
 // ---- Envelope ---------------------------------------------------------------
 
 // Type is the discriminator for the three payload kinds in the protocol.
-type Type string
+type Type byte
 
 const (
-	TypeOffer   Type = "offer"
-	TypeAnswer  Type = "answer"
-	TypeMessage Type = "message"
+	TypeOffer   Type = 0x01
+	TypeAnswer  Type = 0x02
+	TypeMessage Type = 0x03
 )
 
 // Envelope is the common wire wrapper used by all relay implementations.

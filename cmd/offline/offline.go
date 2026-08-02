@@ -4,18 +4,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
+	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 )
 
+// PayloadEnvelope wraps raw payload bytes for REPL transport.
+// Data is base64-encoded (binmodel does not auto-encode []byte).
 type PayloadEnvelope struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
+	Type string `bin:"type"`
+	Data []byte `bin:"data"`
 }
 
 func wrapEnvelope(t string, data []byte) ([]byte, error) {
@@ -23,20 +26,24 @@ func wrapEnvelope(t string, data []byte) ([]byte, error) {
 		Type: t,
 		Data: data,
 	}
-	return json.Marshal(env)
+	return Encoding.Marshal(env)
 }
 
 func unwrapEnvelope(data []byte) (PayloadEnvelope, error) {
 	var env PayloadEnvelope
-	err := json.Unmarshal(data, &env)
+	err := Encoding.Unmarshal(data, &env)
 	return env, err
+}
+
+func envelopeData(env PayloadEnvelope) []byte {
+	return env.Data
 }
 
 func RunOffline(api *core.Engine) {
 	scanner := bufio.NewScanner(os.Stdin)
 	_ = context.Background()
 
-	var activeClient *crypto.Client
+	var activeClient *client.Client
 
 	fmt.Println("=== NexTalk (Offline Transport) ===")
 	fmt.Println("init | load | offer | accept | finish | encrypt | decrypt | help | clear | exit")
@@ -59,7 +66,7 @@ func RunOffline(api *core.Engine) {
 		switch cmd {
 
 		case "init":
-			activeClient = api.Initialize()
+			activeClient = client.NewClient()
 			fmt.Println("[+] Init:", activeClient.Id)
 
 		case "load":
@@ -67,7 +74,7 @@ func RunOffline(api *core.Engine) {
 				fmt.Println("usage: load <client_id>")
 				continue
 			}
-			cl, err := api.LoadClient(parts[1])
+			cl, err := client.LoadClient(parts[1])
 			if err != nil {
 				fmt.Println("[-] load failed:", err)
 				continue
@@ -76,19 +83,31 @@ func RunOffline(api *core.Engine) {
 			fmt.Println("[+] loaded:", cl.Id)
 
 		case "offer":
-			// FIXED: CreateOffer returns (bytes, error)
-			offerBytes, err := api.CreateOffer("")
+
+			if len(parts) < 2 {
+				fmt.Println("usage: offer <client_id>")
+				continue
+			}
+			if activeClient == nil {
+				fmt.Println("[-] Please 'init' or 'load' an identity first.")
+				continue
+			}
+			offerBytes, err := activeClient.CreateOffer(parts[1])
+
 			if err != nil {
 				fmt.Println("[-] offer failed:", err)
 				continue
 			}
 
-			env, _ := wrapEnvelope("offer", offerBytes)
+			env, err := wrapEnvelope("offer", offerBytes)
+			if err != nil {
+				fmt.Println("[-] encode failed:", err)
+				continue
+			}
 			out := base64.StdEncoding.EncodeToString(env)
 			fmt.Println("[+] OFFER:\n", out)
 
 		case "accept":
-			fmt.Print("offer: ")
 			scanner.Scan()
 
 			envBytes, _ := base64.StdEncoding.DecodeString(scanner.Text())
@@ -98,14 +117,24 @@ func RunOffline(api *core.Engine) {
 				continue
 			}
 
-			// FIXED: AcceptOffer takes []byte (env.Data is already []byte)
-			answerBytes, err := api.AcceptOffer(env.Data)
+			if activeClient == nil {
+				fmt.Println("[-] Please 'init' or 'load' an identity first.")
+				continue
+			}
+
+			data := envelopeData(env)
+
+			answerBytes, err := activeClient.AcceptOffer(data)
 			if err != nil {
 				fmt.Println("[-] accept failed:", err)
 				continue
 			}
 
-			answerEnv, _ := wrapEnvelope("answer", answerBytes)
+			answerEnv, err := wrapEnvelope("answer", answerBytes)
+			if err != nil {
+				fmt.Println("[-] encode failed:", err)
+				continue
+			}
 			fmt.Println("[+] ANSWER:\n", base64.StdEncoding.EncodeToString(answerEnv))
 
 		case "finish":
@@ -119,8 +148,14 @@ func RunOffline(api *core.Engine) {
 				continue
 			}
 
-			// FIXED: FinishHandshake takes []byte
-			peerID, err := api.FinishHandshake(env.Data)
+			if activeClient == nil {
+				fmt.Println("[-] Please 'init' or 'load' an identity first.")
+				continue
+			}
+
+			data := envelopeData(env)
+
+			peerID, err := activeClient.FinishHandshake(data)
 			if err != nil {
 				fmt.Println("[-] finish failed:", err)
 				continue
@@ -135,43 +170,59 @@ func RunOffline(api *core.Engine) {
 			}
 
 			peer := parts[1]
-			msg := strings.Join(parts[2:], " ")
+			message := strings.Join(parts[2:], " ")
 
-			// 1. Get the Base64 string from the engine
-			cipherBytes, err := api.Encrypt(peer, msg)
+			var plaintext []byte
+			var err error
+			if message != "" {
+				plaintext = []byte(message)
+			} else {
+				plaintext, err = io.ReadAll(os.Stdin)
+				if err != nil {
+					fmt.Println("failed to read stdin: %w", err)
+				}
+
+				if len(plaintext) == 0 {
+					fmt.Println("no codec provided")
+				}
+			}
+
+			if activeClient == nil {
+				fmt.Println("[-] Please 'init' or 'load' an identity first.")
+				continue
+			}
+
+			cipherBytes, err := activeClient.Encrypt(peer, plaintext)
+
 			if err != nil {
 				fmt.Println("[-] encrypt failed:", err)
 				continue
 			}
 
-			if err != nil {
-				fmt.Println("[-] base64 decode failed:", err)
-				continue
-			}
-
-			// 3. Wrap the raw bytes
-			env, _ := wrapEnvelope("message", cipherBytes)
-			fmt.Println("[+] PACKAGE:\n", base64.StdEncoding.EncodeToString(env))
+			fmt.Println("[+] PACKAGE:\n", base64.StdEncoding.EncodeToString(cipherBytes))
 
 		case "decrypt":
 			fmt.Print("package: ")
 			scanner.Scan()
-
-			envBytes := []byte(scanner.Text())
-			env, err := unwrapEnvelope(envBytes)
+			envBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scanner.Text()))
 			if err != nil {
-				fmt.Println("[-] invalid package")
+				fmt.Println("[-] invalid base64 package:", err)
 				continue
 			}
 
-			senderID, plain, err := api.Decrypt(base64.StdEncoding.EncodeToString(env.Data))
+			if activeClient == nil {
+				fmt.Println("[-] Please 'init' or 'load' an identity first.")
+				continue
+			}
+
+			senderID, plain, err := activeClient.Decrypt(envBytes)
 			if err != nil {
 				fmt.Println("[-] decrypt failed:", err)
 				continue
 			}
 
 			fmt.Printf("[+] sender: %s\n", senderID)
-			fmt.Printf("[+] message: %s\n", plain)
+			fmt.Printf("[+] message: %s\n", string(plain))
 
 		case "help":
 			fmt.Println("=== NexTalk (Offline Transport) ===")
@@ -190,7 +241,7 @@ func RunOffline(api *core.Engine) {
 			fmt.Print("\033[H\033[2J")
 			fmt.Println("=== NexTalk (Offline Transport) ===")
 			fmt.Println("init | load | offer | accept | finish | encrypt | decrypt | help | clear | exit")
-			
+
 		case "exit":
 			fmt.Println("[+] bye.")
 			return

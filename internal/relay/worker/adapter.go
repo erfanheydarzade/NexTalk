@@ -21,6 +21,31 @@ import (
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 )
 
+// ─── REQUIRED relay package additions (v2.2 replication) ────────────────────
+//
+// This file assumes the following NEW fields exist on types defined in the
+// sibling `relay` package (not shown here — add them there):
+//
+//   relay.RoutingTable:
+//     Shards            []relay.ShardIdentity `json:"shards"`             // {URL, PublicKey}
+//     ReplicationFactor int                    `json:"replication_factor"`
+//
+//   relay.ShardIdentity (new type):
+//     URL       string `json:"url"`
+//     PublicKey string `json:"pubkey"` // hex, may be empty for legacy/manual shards
+//
+//   relay.MailboxCapability:
+//     ReplicaShardURLs []string `json:"replica_shard_urls"`
+//
+//   relay.PeerResolution:
+//     ReplicaShardURLs []string `json:"replica_shard_urls"`
+//
+// Everything else (Register/Resolve/Send/Receive call shapes) is unchanged;
+// these are purely additive fields the Router now includes in its JSON
+// responses (see router.js handleRegister / handleResolve). A client built
+// against the OLD relay types still works — it'll just never see replicas
+// and always talk to a single shard, same as v2.1.
+
 // ─── Router client: routing table + capability + resolve caching ───────────
 //
 // This is the entire Router-facing surface of the client. Everything below
@@ -343,13 +368,44 @@ func (a *Adapter) sendToShard(ctx context.Context, shardURL, recipientMailboxID 
 }
 
 // SendToPubkey is the common-case entry point: resolve the recipient (cached
-// after first use) and deliver directly to their shard.
+// after first use) and deliver to their shard, falling back through the
+// rest of the replica set if the primary is unreachable. We stop at the
+// first shard that accepts the message — that shard is responsible for
+// fanning it out to the rest of its own replica set itself (see
+// shard/worker.js replicateToSiblings), so we deliberately do NOT fan out
+// from the client side too, which would just duplicate the message N times.
 func (a *Adapter) SendToPubkey(ctx context.Context, recipientPubKey []byte, payload []byte, senderPriv ed25519.PrivateKey) error {
 	res, err := a.router.Resolve(ctx, hex.EncodeToString(recipientPubKey))
 	if err != nil {
 		return fmt.Errorf("resolve recipient: %w", err)
 	}
-	return a.sendToShard(ctx, res.ShardURL, res.MailboxID, payload, senderPriv)
+
+	candidates := candidateShardURLs(res.ShardURL, res.ReplicaShardURLs)
+
+	var lastErr error
+	for _, shardURL := range candidates {
+		lastErr = a.sendToShard(ctx, shardURL, res.MailboxID, payload, senderPriv)
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("send failed on all %d known replica(s): %w", len(candidates), lastErr)
+}
+
+// candidateShardURLs returns primary followed by any other replicas, with
+// no duplicates, tolerating a nil/empty replica list (pre-v2.2 Router, or
+// REPLICATION_FACTOR=1).
+func candidateShardURLs(primary string, replicas []string) []string {
+	seen := map[string]bool{primary: true}
+	out := []string{primary}
+	for _, u := range replicas {
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	return out
 }
 
 func (a *Adapter) Send(
@@ -441,14 +497,28 @@ func (a *Adapter) Receive(
 		return nil, err
 	}
 
-	return a.receiveCapability(ctx, cap)
+	// Read the primary first (the common, fast path); a message replicated
+	// there is consumed there and never touches the other replicas at all.
+	// Only fall back to siblings if the primary itself is unreachable —
+	// e.g. it's down and this is genuinely the only way to recover
+	// messages that got replicated elsewhere before the primary died.
+	var lastErr error
+	for _, shardURL := range candidateShardURLs(cap.ShardURL, cap.ReplicaShardURLs) {
+		attemptCap := cap
+		attemptCap.ShardURL = shardURL
+		msgs, err := a.receiveCapability(ctx, attemptCap)
+		if err == nil {
+			return msgs, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("receive failed on all known replica(s): %w", lastErr)
 }
 
-func WrapEnvelope(t relay.Type, b64data string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(b64data)
-	if err != nil {
-		return nil, err
+// UnwrapEnvelope splits a raw binary payload back into its Type and Data.
+func UnwrapEnvelope(raw []byte) (relay.Type, []byte, error) {
+	if len(raw) < 1 {
+		return 0, nil, fmt.Errorf("envelope too short: %d bytes", len(raw))
 	}
-	env := relay.Envelope{Type: t, Data: json.RawMessage(raw)}
-	return json.Marshal(env)
+	return relay.Type(raw[0]), raw[1:], nil
 }

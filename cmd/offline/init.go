@@ -1,35 +1,47 @@
 package offline
 
 import (
-	"encoding/json"
 	"fmt"
 
+	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
+	"github.com/erfanheydarzade/NexTalk/internal"
 	"github.com/spf13/cobra"
 )
 
+// InitCommand builds the `init` subcommand.
 func (c *Command) InitCommand() *cobra.Command {
-	return &cobra.Command{
+	var format string
+
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize a local peer identity",
+		// See encrypt.go/decrypt.go: we own all error reporting ourselves,
+		// cobra must stay silent.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunInit(c.engine)
+			err := RunInit(c.engine, format)
+			return internal.ReportAndExit(err, format)
 		},
 	}
+
+	cmd.Flags().StringVar(&format, "format", "human", "Output format: human, json")
+
+	return cmd
 }
 
-func RunInit(engine *core.Engine) error {
-	client := engine.Initialize()
-	response := InitResponse{
-		ID: client.Id,
-	}
-
-	output, err := json.Marshal(response)
-	if err != nil {
+func RunInit(engine *core.Engine, format string) error {
+	if err := internal.ValidateFormat(format); err != nil {
 		return err
 	}
 
-	fmt.Println(string(output))
+	cl := Client.NewClient()
 
+	if format == internal.FormatJSON {
+		return internal.WriteJSONResponse(InitResponse{ID: cl.Id})
+	}
+
+	fmt.Printf("[✓] Identity created\n\nID:\n%s\n", cl.Id)
 	return nil
 }
