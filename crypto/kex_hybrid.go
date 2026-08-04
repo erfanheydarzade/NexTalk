@@ -40,13 +40,13 @@ func keyLabel(key []byte) string {
 // so that hmacPayload() can produce a stable canonical form without any
 // nil-then-re-marshal tricks.
 type SecureMessage struct {
-	SenderID    string `bin:"s"`
-	RatchetKey  []byte `bin:"k"`
-	Nonce       int    `bin:"n"`
-	Ciphertext  []byte `bin:"c"`
-	Tag         []byte `bin:"-"` // transported separately; never in HMAC codec
-	RequestKey  []byte `bin:"rk"`
-	AcceptedKey []byte `bin:"ak"`
+	SenderID    string `bin:"0"`
+	RatchetKey  []byte `bin:"1"`
+	Nonce       int    `bin:"2"`
+	Ciphertext  []byte `bin:"3"`
+	Tag         []byte `bin:"-"`
+	RequestKey  []byte `bin:"4"`
+	AcceptedKey []byte `bin:"5"`
 }
 
 // SecurePeer holds the full cryptographic state of a participant.
