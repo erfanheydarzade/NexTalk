@@ -21,12 +21,14 @@ NexTalk establishes a secure, forward-secret session between two peers using a h
 
 ```
 cmd/
+  contacts/        → Global contacts management (add, remove, rename, note, info, list)
   nextalk/          → Binary entry point (main.go)
   offline/          → Cobra subcommands: init, offer, accept, finish, encrypt, decrypt, run
   worker/           → Worker transport subcommand + registration
   proxy/            → Proxy transport subcommand + registration
   shell/              → shell launcher
-
+  transports/       → Transport auto-registration via side-effect imports
+  
 core/               → Protocol engine: handshake orchestration, session management
 crypto/             → Cryptographic primitives: keys, ratchet, AEAD, HKDF
 client/             → Peer identity state + persistent session storage (JSON files)
@@ -144,7 +146,9 @@ Requires Go 1.21+. Dependencies are managed via `go.mod`.
 
 Offline mode is a self-contained cryptographic lab with no networking. It is the reference implementation of the protocol and is used for testing, debugging, and manual session bootstrapping.
 
-Each command outputs a JSON envelope to stdout. Envelopes are piped between commands to complete a handshake.
+Each command outputs a JSON envelope to stdout by default. Blobs can also be written to files or piped between commands to complete a handshake.
+
+All `--in` / `--out` flags accept `raw` (default), `b64`, or `hex`. The exception is `offline decrypt`, where `--in` defaults to `b64` since ciphertext almost always travels base64-encoded.
 
 ---
 
@@ -152,6 +156,7 @@ Each command outputs a JSON envelope to stdout. Envelopes are piped between comm
 
 ```bash
 ./nextalk offline init
+./nextalk offline init --format json
 ```
 
 Generates a fresh Ed25519 + Dilithium3 identity and persists it to `<peer_id>.json` in the working directory.
@@ -166,13 +171,18 @@ Generates a fresh Ed25519 + Dilithium3 identity and persists it to `<peer_id>.js
 ### `offer` — Generate a handshake offer (Initiator, Step 1)
 
 ```bash
-./nextalk offline offer -i <local_peer_id> -r <remote_peer_id>
+./nextalk offline offer -i <local_peer_id> -r <remote_peer_id>            # raw bytes to stdout
+./nextalk offline offer -i <local_peer_id> -r <remote_peer_id> -o offer.bin   # write to file
+./nextalk offline offer -i <local_peer_id> -r <remote_peer_id> --out b64  # base64 to stdout
 ```
 
-| Flag | Short | Description              |
-|------|-------|--------------------------|
+| Flag | Short | Description |
+|------|-------|-------------|
 | `--id` | `-i` | Local peer ID (required) |
 | `--remotePeer` | `-r` | Recipient peer ID (required) |
+| `--output` | `-o` | Write offer blob to file (raw bytes); disables stdout |
+| `--out` | | stdout encoding: `raw`, `b64`, `hex` — ignored when `-o` is used (default: raw) |
+| `--format` | | `human` or `json` |
 
 Loads `<local_peer_id>.json`, generates ephemeral keys + Kyber768 keypair, signs the bundle with Ed25519 + Dilithium3, and outputs an offer envelope.
 
@@ -200,15 +210,22 @@ Loads `<local_peer_id>.json`, generates ephemeral keys + Kyber768 keypair, signs
 ### `accept` — Accept an offer and generate an answer (Responder, Step 2)
 
 ```bash
-./nextalk offline accept -i <local_peer_id> -o '<offer_envelope_json>'
+./nextalk offline accept -i <local_peer_id> -f offer.bin -o answer.bin        # file in → file out
+./nextalk offline accept -i <local_peer_id> -e <B64_OFFER> --in b64 --out b64 # inline b64 round-trip
+cat offer.bin | ./nextalk offline accept -i <local_peer_id> -o answer.bin     # piped stdin
 ```
 
-| Flag | Short | Description                          |
-|------|-------|--------------------------------------|
-| `--id` | `-i` | Local peer ID (required)             |
-| `--offerEnvelope` | `-o` | Offer JSON envelope (required) |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Local peer ID (required) |
+| `--offerEnvelope` | `-e` | Inline offer blob |
+| `--file` | `-f` | File containing the offer |
+| `--output` | `-o` | Write answer blob to file |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--out` | | stdout encoding (default: raw) |
+| `--format` | | `human` or `json` |
 
-Verifies both signatures (Ed25519 + Dilithium3), checks Offer ID for replay, **encapsulates** the initiator's Kyber768 public key to produce `(kyber_ciphertext, shared_secret)`, runs the full handshake, and outputs an answer envelope.
+Offer can also be piped via stdin (omit `-e` and `-f`). Verifies both signatures (Ed25519 + Dilithium3), checks Offer ID for replay, **encapsulates** the initiator's Kyber768 public key to produce `(kyber_ciphertext, shared_secret)`, runs the full handshake, and outputs an answer envelope.
 
 **Output:**
 ```json
@@ -235,13 +252,17 @@ Verifies both signatures (Ed25519 + Dilithium3), checks Offer ID for replay, **e
 ### `finish` — Finalize the session (Initiator, Step 3)
 
 ```bash
-./nextalk offline finish -i <local_peer_id> -a '<answer_envelope_json>'
+./nextalk offline finish -i <local_peer_id> -f answer.bin           # from file
+./nextalk offline finish -i <local_peer_id> -a <B64_ANSWER> --in b64  # inline base64
 ```
 
-| Flag | Short | Description                           |
-|------|-------|---------------------------------------|
-| `--id` | `-i` | Local peer ID (required)              |
-| `--answerEnvelope` | `-a` | Answer JSON envelope (required) |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Local peer ID (required) |
+| `--answerEnvelope` | `-a` | Inline answer blob |
+| `--file` | `-f` | File containing the answer |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--format` | | `human` or `json` |
 
 **Decapsulates** the Kyber ciphertext using the initiator's stored private key to recover `shared_secret`, then runs the same handshake derivation. If both peers derived the same shared secret, their session keys will match and the ratchet is active.
 
@@ -255,16 +276,23 @@ Verifies both signatures (Ed25519 + Dilithium3), checks Offer ID for replay, **e
 ### `encrypt` — Encrypt a message
 
 ```bash
-./nextalk offline encrypt -i <local_peer_id> -r <remote_peer_id> -m "hello"
+./nextalk offline encrypt -i <local_peer_id> -r <remote_peer_id> -m "hello"           # inline message
+./nextalk offline encrypt -i <local_peer_id> -r <remote_peer_id> -f secret.txt -o cipher.bin  # file in → file out
+echo "hello" | ./nextalk offline encrypt -i <local_peer_id> -r <remote_peer_id> --out b64     # stdin → b64 stdout
 ```
 
-| Flag | Short | Description                     |
-|------|-------|---------------------------------|
-| `--id` | `-i` | Local peer ID (required)        |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Local peer ID (required) |
 | `--remotePeer` | `-r` | Target session peer ID (required) |
-| `--message` | `-m` | Plaintext message (required)  |
+| `--message` | `-m` | Inline plaintext |
+| `--file` | `-f` | Plaintext input file |
+| `--output` | `-o` | Write ciphertext to file |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--out` | | stdout encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--format` | | `human` or `json` |
 
-Loads the active session for the remote peer, advances the send ratchet, and outputs the encrypted envelope.
+If neither `--message` nor `--file` is given, plaintext is read from stdin. Binary output to a TTY requires `--out b64`/`--out hex` or `-o file`. Loads the active session for the remote peer, advances the send ratchet, and outputs the encrypted envelope.
 
 **Output:**
 ```json
@@ -285,15 +313,22 @@ Loads the active session for the remote peer, advances the send ratchet, and out
 ### `decrypt` — Decrypt a message
 
 ```bash
-./nextalk offline decrypt -i <local_peer_id> -c '<message_envelope_json>'
+./nextalk offline decrypt -i <local_peer_id> -f cipher.bin              # from file (raw input)
+./nextalk offline decrypt -i <local_peer_id> -c <B64_CIPHER> --in b64   # inline base64
+./nextalk offline decrypt -i <local_peer_id> -f cipher.bin -o plain.txt # save decrypted to file
 ```
 
-| Flag | Short | Description                        |
-|------|-------|------------------------------------|
-| `--id` | `-i` | Local peer ID (required)           |
-| `--cipherText` | `-c` | Message JSON envelope (required) |
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Local peer ID (required) |
+| `--cipherText` | `-c` | Inline ciphertext blob |
+| `--file` | `-f` | Encrypted input file |
+| `--output` | `-o` | Write decrypted content to file |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: **b64**) |
+| `--out` | | stdout encoding (default: raw) |
+| `--format` | | `human` or `json` |
 
-Verifies HMAC, resolves the sender session, handles any DH ratchet advancement, and decrypts.
+Note: `--in` defaults to `b64` here (unlike all other commands) since ciphertext almost always arrives base64-encoded in transit. Binary output to a TTY requires `--out b64`/`--out hex` or `-o file`. Verifies HMAC, resolves the sender session, handles any DH ratchet advancement, and decrypts.
 
 **Output:**
 ```json
@@ -320,26 +355,181 @@ Launches the interactive offline shell with the same commands available as one-l
 
 ## Full Offline Handshake Example
 
+### Inline / piped (scripted)
+
 ```bash
 # Step 0: create identities for Alice and Bob
 ALICE=$(./nextalk offline init | jq -r '.id')
 BOB=$(./nextalk offline init | jq -r '.id')
 
-# Step 1: Alice creates an offer
-OFFER=$(./nextalk offline offer -i "$ALICE" -r "$BOB")
+# Step 1: Alice creates an offer (base64 stdout for safe transport)
+OFFER=$(./nextalk offline offer -i "$ALICE" -r "$BOB" --out b64)
 
-# Step 2: Bob accepts the offer
-ANSWER=$(./nextalk offline accept -i "$BOB" -o "$OFFER")
+# Step 2: Bob accepts the offer and produces an answer
+ANSWER=$(./nextalk offline accept -i "$BOB" -e "$OFFER" --in b64 --out b64)
 
-# Step 3: Alice finishes the handshake
-./nextalk offline finish -i "$ALICE" -a "$ANSWER"
+# Step 3: Alice finalises the handshake
+./nextalk offline finish -i "$ALICE" -a "$ANSWER" --in b64
 
 # Step 4: Alice sends an encrypted message to Bob
-MSG=$(./nextalk offline encrypt -i "$ALICE" -r "$BOB" -m "hello world")
+CIPHER=$(./nextalk offline encrypt -i "$ALICE" -r "$BOB" -m "hello world" --out b64)
 
 # Step 5: Bob decrypts it
-./nextalk offline decrypt -i "$BOB" -c "$MSG"
+./nextalk offline decrypt -i "$BOB" -c "$CIPHER" --in b64
 # → {"type":"message","data":{"sender":"<alice_id>","message":"hello world"}}
+```
+
+### File-based (air-gap / manual exchange)
+
+```bash
+ALICE=$(./nextalk offline init | jq -r '.id')
+BOB=$(./nextalk offline init | jq -r '.id')
+
+# Alice writes the offer to disk and hands the file to Bob out-of-band
+./nextalk offline offer  -i "$ALICE" -r "$BOB" -o offer.bin
+
+# Bob accepts and writes the answer to disk
+./nextalk offline accept -i "$BOB" -f offer.bin -o answer.bin
+
+# Alice finalises
+./nextalk offline finish -i "$ALICE" -f answer.bin
+
+# Alice encrypts a file for Bob
+./nextalk offline encrypt -i "$ALICE" -r "$BOB" -f secret.txt -o cipher.bin
+
+# Bob decrypts it
+./nextalk offline decrypt -i "$BOB" -f cipher.bin -o plain.txt
+```
+
+---
+
+## CLI Usage — Contacts
+
+The global address book is independent of any identity or transport. Contacts map friendly names to raw peer IDs, so you can pass `alice` anywhere a peer ID is expected.
+
+Mutation commands (`add`, `remove`, `rename`, `note`) emit JSON confirmation. Read commands (`info`, `list`) print structured output.
+
+### `contacts add`
+
+```bash
+nextalk contacts add <name> <peer_id>
+nextalk contacts add alice 5Ht3...
+```
+
+### `contacts remove`
+
+Aliases: `rm`, `delete`.
+
+```bash
+nextalk contacts remove alice
+nextalk contacts rm alice
+```
+
+### `contacts rename`
+
+```bash
+nextalk contacts rename alice ali
+```
+
+### `contacts note`
+
+Attach or update a free-text note on a contact. Pass an empty string to clear.
+
+```bash
+nextalk contacts note alice "met at conf 2025"
+nextalk contacts note alice ""
+```
+
+### `contacts info`
+
+Print a single contact's name, peer ID, and note as JSON.
+
+```bash
+nextalk contacts info alice
+```
+
+### `contacts list`
+
+Alias: `ls`. Prints a human-readable table and the underlying JSON.
+
+```bash
+nextalk contacts list
+nextalk contacts ls
+```
+
+---
+
+## CLI Usage — Worker Mode
+
+Worker mode routes all traffic through a Cloudflare Workers relay (`WORKER_URL`). All subcommands accept `--format human` (default) or `--format json` for scripting.
+
+### `worker init`
+
+Generate a fresh Ed25519 identity, persist it locally, and register its mailbox with the relay. Prints the new peer ID.
+
+```bash
+nextalk worker init
+nextalk worker init --format json
+```
+
+### `worker connect`
+
+Send a post-quantum handshake offer to a remote peer via the relay.
+
+```bash
+nextalk worker connect -i <YOUR_ID> -r <PEER_ID>
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Your local peer ID (required) |
+| `--remotePeer` | `-r` | Recipient peer ID (required) |
+| `--format` | | `human` or `json` (default: human) |
+
+### `worker listen`
+
+Poll the relay inbox and process all pending events: automatically answers incoming handshake offers and delivers decrypted messages.
+
+```bash
+nextalk worker listen -i <YOUR_ID>
+nextalk worker listen -i <YOUR_ID> --format json
+```
+
+Event types returned: `offer`, `answer`, `message`, `error`.
+
+### `worker encrypt`
+
+Encrypt a message or file and dispatch it to a peer through the relay. Requires an established session (`connect` + `listen` first).
+
+```bash
+nextalk worker encrypt -i <YOUR_ID> -r <PEER_ID> -m "hello"
+nextalk worker encrypt -i <YOUR_ID> -r <PEER_ID> -f plaintext.txt
+nextalk worker encrypt -i <YOUR_ID> -r <PEER_ID> -m "hello" --out hex
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Your local peer ID (required) |
+| `--remotePeer` | `-r` | Recipient peer ID (required) |
+| `--message` | `-m` | Inline plaintext |
+| `--file` | `-f` | Path to plaintext input file |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--out` | | Output encoding for the echoed ciphertext: `raw`, `b64`, `hex` (default: b64) |
+| `--format` | | `human` or `json` |
+
+If neither `--message` nor `--file` is given, plaintext is read from stdin.
+
+### Scripted worker handshake
+
+```bash
+ALICE=$(nextalk worker init --format json | jq -r .id)
+BOB=$(nextalk worker init --format json | jq -r .id)
+
+nextalk worker connect -i "$ALICE" -r "$BOB"
+nextalk worker listen  -i "$BOB"              # auto-answers offer
+nextalk worker listen  -i "$ALICE"            # finalises session
+nextalk worker encrypt -i "$ALICE" -r "$BOB" -m "hello"
+nextalk worker listen  -i "$BOB" --format json
 ```
 
 ---
