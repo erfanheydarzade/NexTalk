@@ -72,10 +72,10 @@ type AcceptOptions struct {
 }
 
 func RunAccept(opts AcceptOptions) error {
-	if err := internal.ValidateFormat(opts.InputEncoding); err != nil {
+	if err := internal.ValidateEncoding(opts.InputEncoding); err != nil {
 		return err
 	}
-	if err := internal.ValidateFormat(opts.OutputEncoding); err != nil {
+	if err := internal.ValidateEncoding(opts.OutputEncoding); err != nil {
 		return err
 	}
 	if err := internal.ValidateFormat(opts.Format); err != nil {
