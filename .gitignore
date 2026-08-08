@@ -29,5 +29,6 @@ go.work.sum
 *.log
 bin/
 dist/
+web/
 *.json
 *.zip
