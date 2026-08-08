@@ -3,13 +3,13 @@ package offline
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
@@ -42,6 +42,51 @@ type OfflineGUITransport struct {
 func (t *OfflineGUITransport) Name() string      { return "offline" }
 func (t *OfflineGUITransport) MenuLabel() string { return "Offline Mode  (Manual Cryptography Lab)" }
 
+// Commands implements registry.CompletionProvider — the single source of truth
+// for Tab completion and Help() in offline mode.
+//
+// Note this list deliberately differs from the worker transport's: offline has
+// offer/accept/finish/decrypt and no listen. The old shared, hard-coded
+// completion list offered `listen` here (which does nothing) and omitted every
+// command in this list, which is the "wrong commands complete" half of the bug.
+func (t *OfflineGUITransport) Commands() []registry.CommandSpec {
+	specs := []registry.CommandSpec{
+		{
+			Name: "init",
+			Help: "Generate a new identity",
+		},
+		registry.IdentityCommand("Load an existing local identity (Tab lists ./<id>.json files)"),
+		{
+			Name:  "offer",
+			Args:  []registry.ArgKind{registry.ArgPeer},
+			Usage: "offer <peer>",
+			Help:  "Generate a handshake offer for a peer (JSON)",
+		},
+		{
+			Name: "accept",
+			Help: "Accept a peer's offer (prompts for the offer JSON)",
+		},
+		{
+			Name: "finish",
+			Help: "Finalise a handshake (prompts for the answer JSON)",
+		},
+		func() registry.CommandSpec {
+			s := registry.MessageCommand("encrypt", "send")
+			s.Help = "Encrypt a message for an established peer"
+			return s
+		}(),
+		{
+			Name:     "decrypt",
+			Args:     []registry.ArgKind{registry.ArgText},
+			Variadic: registry.ArgText,
+			Usage:    "decrypt <b64>",
+			Help:     "Decrypt a base64 ciphertext frame",
+		},
+		registry.PeersCommand(),
+	}
+	return append(specs, registry.BaseCommands()...)
+}
+
 func (t *OfflineGUITransport) Init(state *registry.State) error {
 	fmt.Printf("\n  \033[1m\033[34m❖ Offline Mode — no network required ❖\033[0m\n\n")
 	t.scanner = bufio.NewScanner(os.Stdin)
@@ -67,9 +112,13 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 		state.ActiveClient = cl
 		fmt.Printf("\033[32m  [✓]\033[0m Loaded: %s\n", cl.Id)
 
+		// Peers persisted in <id>.json become Tab-completable immediately,
+		// so a restarted shell doesn't lose them.
+		state.SyncPeersFromClient()
+
 	case "offer":
 		if len(args) < 1 {
-			fmt.Println("  Usage: load <id>")
+			fmt.Println("  Usage: offer <peer>")
 			return true
 		}
 		if state.ActiveClient == nil {
@@ -77,11 +126,20 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			return true
 		}
 
-		bytes, err := state.ActiveClient.CreateOffer(args[0])
+		peerID, err := state.ResolvePeer(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
+		}
+
+		bytes, err := state.ActiveClient.CreateOffer(peerID)
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Offer failed: %v\n", err)
 			return true
 		}
+		// Remember the target now so the follow-up 'encrypt' can Tab-complete
+		// it instead of requiring the full ID to be retyped.
+		state.RememberPeer(peerID)
 		fmt.Printf("\033[36m  [i]\033[0m OFFER JSON:\n%s\n", string(bytes))
 
 	case "accept":
@@ -101,6 +159,10 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Printf("\033[31m  [✗]\033[0m Accept failed: %v\n", err)
 			return true
 		}
+		// AcceptOffer stores the new session under the sender's ID, so
+		// syncing from the client is enough to make that peer completable —
+		// no need to re-parse the offer JSON just to learn who sent it.
+		state.SyncPeersFromClient()
 		fmt.Printf("\033[32m  [✓]\033[0m ANSWER JSON:\n%s\n", string(ansBytes))
 
 	case "finish":
@@ -120,6 +182,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Printf("\033[31m  [✗]\033[0m Finish failed: %v\n", err)
 			return true
 		}
+		state.RememberPeer(peerID)
 		fmt.Printf("\033[32m  [✓]\033[0m Session established: %s\n", peerID)
 
 	case "encrypt", "send":
@@ -132,11 +195,14 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			return true
 		}
 
-		peer := args[0]
+		peer, err := state.ResolvePeer(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
+		}
 		message := strings.Join(args[1:], " ")
 
 		var plaintext []byte
-		var err error
 
 		if message != "" {
 			// Text codec from CLI
@@ -158,6 +224,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Printf("\033[31m  [✗]\033[0m Encrypt failed: %v\n", err)
 			return true
 		}
+		state.RememberPeer(peer)
 		fmt.Printf("\033[32m  [✓]\033[0m CIPHERTEXT JSON:\n%s\n", string(cipher))
 
 	case "decrypt":
@@ -170,7 +237,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			return true
 		}
 
-		ciphertext, err := Encoding.DecodeBase64(args[0])
+		ciphertext, err := base64.StdEncoding.DecodeString(args[0])
 		if err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Invalid ciphertext: %v\n", err)
 			return true
@@ -180,7 +247,11 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 			fmt.Printf("\033[31m  [✗]\033[0m Decrypt failed: %v\n", err)
 			return true
 		}
+		state.RememberPeer(senderID)
 		fmt.Printf("\033[32m  [✓]\033[0m From %s: %s\n", senderID, plain)
+
+	case "peers":
+		state.PrintPeers("'offer <id>' or 'accept'")
 
 	case "help":
 		t.Help()
@@ -195,13 +266,7 @@ func (t *OfflineGUITransport) Execute(state *registry.State, cmd string, args []
 }
 
 func (t *OfflineGUITransport) Help() {
-	fmt.Println("\n\033[1mCommands:\033[0m")
-	fmt.Println("  init                  - Generate new identity")
-	fmt.Println("  load <id>             - Load existing identity")
-	fmt.Println("  offer                 - Generate a handshake offer (JSON)")
-	fmt.Println("  accept                - Accept a peer's offer (paste JSON)")
-	fmt.Println("  finish                - Finalise handshake (paste answer JSON)")
-	fmt.Println("  encrypt <peer> <msg>  - Encrypt a message")
-	fmt.Println("  decrypt <json>        - Decrypt a ciphertext")
-	fmt.Println("  switch / exit         - Return to main menu")
+	// Rendered from the same specs that drive Tab completion, so help and
+	// completion can never disagree about what exists.
+	registry.RenderHelp(t.Commands())
 }

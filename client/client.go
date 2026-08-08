@@ -21,7 +21,6 @@ import (
 
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/crypto"
-	"github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"golang.org/x/crypto/ed25519"
 )
 
@@ -193,7 +192,10 @@ func (c *Client) Encrypt(peerID string, message []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("session not found for peer %s", peerID)
 	}
-	ciphertext := session.Encrypt(c.Id, message)
+	ciphertext, err := session.Encrypt(c.Id, message)
+	if err != nil {
+		return nil, err
+	}
 	SaveClient(c)
 	return ciphertext, nil
 }
@@ -202,15 +204,16 @@ func (c *Client) Encrypt(peerID string, message []byte) ([]byte, error) {
 // The sender ID is read from the message header and used to look up the
 // correct SecurePeer session.
 func (c *Client) Decrypt(payloadBytes []byte) (string, []byte, error) {
-
-	fields, err := encoding.Decode(payloadBytes)
+	// The claimed sender only selects the session; it is authenticated by
+	// the HMAC check inside SecurePeer.Decrypt below.
+	claimedSender, err := crypto.SenderIDFromFrame(payloadBytes)
 	if err != nil {
-		return "", nil, fmt.Errorf("error parsing binmodel message: %v", err)
+		return "", nil, err
 	}
 
-	session, exists := c.Sessions[string(fields["s"])]
+	session, exists := c.Sessions[claimedSender]
 	if !exists {
-		return "", nil, fmt.Errorf("no active session with user '%s'", string(fields["s"]))
+		return "", nil, fmt.Errorf("no active session with user '%s'", claimedSender)
 	}
 	senderID, plaintext, err := session.Decrypt(payloadBytes)
 	if err != nil {

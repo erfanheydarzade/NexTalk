@@ -43,6 +43,43 @@ type WorkerGUITransport struct{}
 func (t *WorkerGUITransport) Name() string      { return "worker" }
 func (t *WorkerGUITransport) MenuLabel() string { return "Worker Mode   (Cloud Relay)" }
 
+// Commands implements registry.CompletionProvider. This is the single source
+// of truth for both Tab completion and Help() — declaring a command here is
+// what makes it completable, and the ArgKind of each slot is what decides
+// whether Tab offers peer IDs, local identities, or nothing at all.
+func (t *WorkerGUITransport) Commands() []registry.CommandSpec {
+	specs := []registry.CommandSpec{
+		{
+			Name: "init",
+			Help: "Generate a new identity & register with the relay",
+		},
+		registry.IdentityCommand("Load an existing local identity (Tab lists ./<id>.json files)"),
+		{
+			Name:  "connect",
+			Args:  []registry.ArgKind{registry.ArgPeer},
+			Usage: "connect <peer>",
+			Help:  "Initiate a handshake (Tab completes peers/contacts; prefix ok)",
+		},
+		{
+			Name: "listen",
+			Help: "Poll the inbox & process offers/answers/messages",
+		},
+		func() registry.CommandSpec {
+			s := registry.MessageCommand("send", "encrypt")
+			s.Help = "Encrypt and dispatch a message"
+			return s
+		}(),
+		{
+			Name:  "mailbox",
+			Args:  []registry.ArgKind{registry.ArgPeer},
+			Usage: "mailbox [peer]",
+			Help:  "List chats, or read one peer's messages",
+		},
+		registry.PeersCommand(),
+	}
+	return append(specs, registry.BaseCommands()...)
+}
+
 func (t *WorkerGUITransport) Init(state *registry.State) error {
 	fmt.Printf("\n\033[1m\033[34m❖ Worker Mode Engaged (Cloud Relay) ❖\033[0m\n\n")
 
@@ -72,7 +109,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			fmt.Printf("\033[31m  [✗]\033[0m Registration failed: %v\n", err)
 		} else if pubHex != hex.EncodeToString(state.ActiveClient.IdentityPublic) {
 			fmt.Printf("\033[33m  [!]\033[0m Identity mismatch local=%s worker=%s\n",
-				shortID(hex.EncodeToString(state.ActiveClient.IdentityPublic)), shortID(pubHex))
+				registry.ShortID(hex.EncodeToString(state.ActiveClient.IdentityPublic)), registry.ShortID(pubHex))
 		} else {
 			fmt.Printf("\033[36m  [i]\033[0m Registered with relay server.\n")
 		}
@@ -90,6 +127,10 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		state.ActiveClient = cl
 		fmt.Printf("\033[32m  [✓]\033[0m Loaded: %s\n", cl.Id)
 
+		// Sessions persisted in <id>.json become completable straight away,
+		// so peers from a previous run don't have to be retyped.
+		state.SyncPeersFromClient()
+
 		if _, err := state.Worker.Register(state.Ctx, cl.IdentityPrivate); err != nil {
 			fmt.Printf("\033[31m  [✗]\033[0m Re-registration failed: %v\n", err)
 		} else {
@@ -105,7 +146,11 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			fmt.Println("  Usage: connect <peer>")
 			return true
 		}
-		peerID := args[0]
+		peerID, err := state.ResolvePeer(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
+		}
 
 		offerBytes, err := state.ActiveClient.CreateOffer(peerID)
 		if err != nil {
@@ -123,7 +168,13 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			fmt.Printf("\033[31m  [✗]\033[0m Send failed: %v\n", err)
 			return true
 		}
-		fmt.Printf("\033[32m  [✓]\033[0m Offer sent to %s\n", shortID(peerID))
+
+		// Record the peer as soon as the offer is out. This is the fix for
+		// the original bug: the initiator can now Tab-complete this ID for
+		// send/mailbox/connect without waiting for a reply to create a
+		// mailbox entry.
+		state.RememberPeer(peerID)
+		fmt.Printf("\033[32m  [✓]\033[0m Offer sent to %s\n", registry.ShortID(peerID))
 
 	case "listen":
 		if state.ActiveClient == nil {
@@ -150,11 +201,19 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 
 	case "send", "encrypt":
+		if state.ActiveClient == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
 		if len(args) < 2 {
 			fmt.Println("  Usage: send <peer> <msg>")
 			return true
 		}
-		peer := args[0]
+		peer, err := state.ResolvePeer(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
+		}
 		message := strings.Join(args[1:], " ")
 
 		plaintext, err := readInput(message)
@@ -187,7 +246,11 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			[]registry.ChatMessage{{Body: "Me: " + message, IsRead: true}},
 			state.Mailbox[peer]...,
 		)
-		fmt.Printf("\033[32m  [✓]\033[0m Message sent to %s\n", shortID(peer))
+		state.RememberPeer(peer)
+		fmt.Printf("\033[32m  [✓]\033[0m Message sent to %s\n", registry.ShortID(peer))
+
+	case "peers":
+		state.PrintPeers("'connect <id>' or 'listen'")
 
 	case "mailbox":
 		if state.Mailbox == nil {
@@ -211,28 +274,29 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 				if unread > 0 {
 					indicator = fmt.Sprintf("\033[33m [%d unread]\033[0m", unread)
 				}
-				fmt.Printf("  \033[36m%s\033[0m%s\n", shortID(peer), indicator)
+				fmt.Printf("  \033[36m%s\033[0m%s\n", registry.ShortID(peer), indicator)
 			}
-			fmt.Println("\nType 'mailbox <peer_id>' to read.")
+			fmt.Println("\nType 'mailbox <peer_id>' to read (Tab completes).")
 			return true
 		}
 
-		target := args[0]
-		fullPeer := target
-		for peer := range state.Mailbox {
-			if strings.HasPrefix(peer, target) {
-				fullPeer = peer
-				break
-			}
+		// ResolvePeer replaces the old "first HasPrefix wins" loop, which
+		// could silently pick the wrong peer when two IDs shared a prefix
+		// (map iteration order is random, so it wasn't even deterministic).
+		// Ambiguous prefixes now error out instead of guessing.
+		fullPeer, err := state.ResolvePeer(args[0])
+		if err != nil {
+			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			return true
 		}
 
 		msgs, ok := state.Mailbox[fullPeer]
 		if !ok {
-			fmt.Printf("\033[33m  [!]\033[0m No messages from %s\n", target)
+			fmt.Printf("\033[33m  [!]\033[0m No messages from %s\n", registry.ShortID(fullPeer))
 			return true
 		}
 
-		fmt.Printf("\n\033[1m❖ Messages with %s ❖\033[0m\n", shortID(fullPeer))
+		fmt.Printf("\n\033[1m❖ Messages with %s ❖\033[0m\n", registry.ShortID(fullPeer))
 		for i, m := range msgs {
 			mark := " "
 			if !m.IsRead {
@@ -256,27 +320,20 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 }
 
 func (t *WorkerGUITransport) Help() {
-	fmt.Printf("\n\033[1mCommands:\033[0m\n")
-	fmt.Println("  init                  - Generate new identity & register")
-	fmt.Println("  load <id>             - Load existing identity")
-	fmt.Println("  connect <peer>        - Initiate handshake with peer")
-	fmt.Println("  listen                - Poll inbox & process events")
-	fmt.Println("  send <peer> <msg>     - Encrypt and dispatch message")
-	fmt.Println("  mailbox               - List all active chats/mailboxes")
-	fmt.Println("  mailbox <peer>        - Read messages from a specific peer")
-	fmt.Println("  switch / exit         - Return to main menu")
+	// Rendered from the same specs that drive Tab completion, so the two can
+	// never disagree about what exists.
+	registry.RenderHelp(t.Commands())
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-func shortID(id string) string {
-	if len(id) < 12 {
-		return id
-	}
-	return id[:6] + "..." + id[len(id)-4:]
-}
-
 // dispatchGUI routes a decoded (type, data) envelope pair and updates state in place.
+//
+// Every branch calls state.RememberPeer so the peer becomes Tab-completable
+// the moment it is seen. This is the responder-side half of the completion
+// bug: user B runs `listen`, receives an offer from user A, and previously had
+// no way to Tab-complete A's ID afterwards because no mailbox entry existed
+// until A sent an actual message.
 func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 	switch t {
 
@@ -300,7 +357,9 @@ func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 			fmt.Printf("\033[31m  [✗]\033[0m Send answer failed: %v\n", err)
 			return
 		}
-		fmt.Printf("\033[32m  [✓]\033[0m Auto-answered offer from %s\n", shortID(offer.SenderId))
+		state.RememberPeer(offer.SenderId)
+		fmt.Printf("\033[32m  [✓]\033[0m Auto-answered offer from %s\n", registry.ShortID(offer.SenderId))
+		fmt.Printf("\033[36m  [i]\033[0m %s is now Tab-completable — try 'send <Tab>'.\n", registry.ShortID(offer.SenderId))
 
 	case relay.TypeAnswer:
 		peerID, err := state.ActiveClient.FinishHandshake(data)
@@ -308,7 +367,8 @@ func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 			fmt.Printf("\033[31m  [✗]\033[0m Handshake finish failed: %v\n", err)
 			return
 		}
-		fmt.Printf("\033[32m  [✓]\033[0m Session established with: %s\n", shortID(peerID))
+		state.RememberPeer(peerID)
+		fmt.Printf("\033[32m  [✓]\033[0m Session established with: %s\n", registry.ShortID(peerID))
 
 	case relay.TypeMessage:
 		senderID, pt, err := state.ActiveClient.Decrypt(data)
@@ -323,7 +383,8 @@ func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 			[]registry.ChatMessage{{Body: string(pt), IsRead: false}},
 			state.Mailbox[senderID]...,
 		)
-		fmt.Printf("\033[35m  [✉]\033[0m New message from %s — check 'mailbox'.\n", shortID(senderID))
+		state.RememberPeer(senderID)
+		fmt.Printf("\033[35m  [✉]\033[0m New message from %s — check 'mailbox'.\n", registry.ShortID(senderID))
 
 	default:
 		fmt.Printf("\033[33m  [!]\033[0m Unknown envelope type: %d\n", t)

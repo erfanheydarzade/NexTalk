@@ -37,14 +37,26 @@ type State struct {
 
 	// Mailbox stores received messages keyed by sender peer ID, newest first.
 	Mailbox map[string][]ChatMessage
+
+	// KnownPeers is the set of peer IDs this session has seen, from any
+	// direction: a peer we sent an offer to, a peer whose offer we accepted,
+	// a peer whose answer completed our handshake, or a peer who messaged us.
+	//
+	// It exists because Mailbox alone is not enough for Tab completion —
+	// Mailbox only gains a key once a *message* is exchanged, so a peer ID
+	// typed into `connect` (or received via `listen`) would otherwise have to
+	// be retyped in full for every later command. Peers are recorded via
+	// State.RememberPeer; see peers.go.
+	KnownPeers map[string]bool
 }
 
 // NewState returns an empty State ready for use by RunGUI.
 func NewState(api *core.Engine, cfg config.Config) *State {
 	return &State{
-		API:     api,
-		Config:  cfg,
-		Ctx:     context.Background(),
-		Mailbox: make(map[string][]ChatMessage),
+		API:        api,
+		Config:     cfg,
+		Ctx:        context.Background(),
+		Mailbox:    make(map[string][]ChatMessage),
+		KnownPeers: make(map[string]bool),
 	}
 }

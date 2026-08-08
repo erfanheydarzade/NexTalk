@@ -114,8 +114,19 @@ type State struct {
     ActiveClient *client.Client
     Worker       relay.Relay       // populate this in Init if you need a relay
     Mailbox      map[string][]ChatMessage
+    KnownPeers   map[string]bool   // peers seen this session; drives Tab completion
 }
 ```
+
+`State` also carries the helpers the shell's Tab completion relies on:
+
+| Method | Purpose |
+|--------|---------|
+| `RememberPeer(id)` | Record a peer ID so it becomes Tab-completable immediately |
+| `SyncPeersFromClient()` | Record every session persisted in the loaded `<id>.json` |
+| `ResolvePeer(input)` | Expand a contact alias or unique ID prefix to a full peer ID |
+| `PeerCandidates()` | All completable peer IDs and contact aliases |
+| `IdentityCandidates()` | Local `<id>.json` profiles, for `load <id>` |
 
 A minimal but complete implementation:
 
@@ -150,11 +161,77 @@ func (t *MyGUITransport) Execute(state *registry.State, cmd string, args []strin
 }
 
 func (t *MyGUITransport) Help() {
-    fmt.Println("\nCommands:")
-    fmt.Println("  hello          - Say hello")
-    fmt.Println("  switch / exit  - Return to main menu")
+    // Render from the same specs that drive Tab completion (see Step 3b) so
+    // help and completion can never disagree about what exists.
+    registry.RenderHelp(t.Commands())
 }
 ```
+
+---
+
+## Step 3b — Declare your commands for Tab completion
+
+Implement the optional `registry.CompletionProvider` interface. This is what
+makes your commands and their arguments complete with `Tab`:
+
+```go
+// CompletionProvider is defined in internal/registry/completion.go
+type CompletionProvider interface {
+    Commands() []CommandSpec
+}
+```
+
+Each `CommandSpec` names a command and declares the *kind* of each positional
+argument, which is what tells the completer where to offer peer IDs:
+
+```go
+func (t *MyGUITransport) Commands() []registry.CommandSpec {
+    specs := []registry.CommandSpec{
+        {
+            Name:  "load",
+            Args:  []registry.ArgKind{registry.ArgIdentity}, // ./<id>.json files
+            Usage: "load <id>",
+            Help:  "Load an existing local identity",
+        },
+        {
+            Name:     "send",
+            Aliases:  []string{"encrypt"},                // both words complete
+            Args:     []registry.ArgKind{registry.ArgPeer}, // peers + contacts
+            Variadic: registry.ArgText,                    // message body: no completion
+            Usage:    "send <peer> <msg>",
+            Help:     "Encrypt and dispatch a message",
+        },
+    }
+    // Appends help/switch/exit so they never have to be redeclared.
+    return append(specs, registry.BaseCommands()...)
+}
+```
+
+`ArgKind` values:
+
+| Kind | Completes with |
+|------|----------------|
+| `ArgPeer` | Known peer IDs plus contact aliases |
+| `ArgIdentity` | `<id>.json` profiles in the current directory |
+| `ArgContact` | Contact aliases only |
+| `ArgText` | Nothing (free-form text: messages, pasted JSON) |
+
+`Args` covers the fixed leading arguments; `Variadic` applies to every argument
+after them.
+
+Two rules keep completion useful:
+
+1. **Call `state.RememberPeer(id)` as soon as you learn a peer ID** — after
+   sending an offer, accepting one, finishing a handshake, or decrypting a
+   message. Waiting for a mailbox entry means the peer stays uncompletable and
+   the user has to retype a 44-character base58 ID.
+2. **Resolve peer arguments with `state.ResolvePeer(args[0])`** instead of using
+   `args[0]` directly, so contact aliases and unique ID prefixes work. It
+   returns an error for an ambiguous prefix rather than guessing — print it and
+   return `true`.
+
+Skipping `Commands()` entirely is allowed: your transport still works, it just
+falls back to completing only `help`, `switch` and `exit`.
 
 ---
 

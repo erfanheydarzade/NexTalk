@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,14 +12,14 @@ import (
 
 	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 )
 
-// PayloadEnvelope wraps raw payload bytes for REPL transport.
-// Data is base64-encoded (binmodel does not auto-encode []byte).
+// PayloadEnvelope wraps raw payload bytes for REPL transport. It is
+// marshalled as JSON, so Data is base64-encoded by encoding/json's []byte
+// handling.
 type PayloadEnvelope struct {
-	Type string `bin:"type"`
-	Data []byte `bin:"data"`
+	Type string `json:"type"`
+	Data []byte `json:"data"`
 }
 
 func wrapEnvelope(t string, data []byte) ([]byte, error) {
@@ -26,12 +27,12 @@ func wrapEnvelope(t string, data []byte) ([]byte, error) {
 		Type: t,
 		Data: data,
 	}
-	return Encoding.Marshal(env)
+	return json.Marshal(env)
 }
 
 func unwrapEnvelope(data []byte) (PayloadEnvelope, error) {
 	var env PayloadEnvelope
-	err := Encoding.Unmarshal(data, &env)
+	err := json.Unmarshal(data, &env)
 	return env, err
 }
 
