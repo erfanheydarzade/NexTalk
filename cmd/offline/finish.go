@@ -1,6 +1,7 @@
 package offline
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal"
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"github.com/spf13/cobra"
 )
 
@@ -86,7 +86,7 @@ func RunFinish(opts FinishOptions) error {
 	}
 
 	var env Envelope
-	if err := Encoding.Unmarshal(data, &env); err != nil {
+	if err := json.Unmarshal(data, &env); err != nil {
 		return fmt.Errorf("failed to parse answer envelope: %w", err)
 	}
 

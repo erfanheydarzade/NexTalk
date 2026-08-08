@@ -1,11 +1,11 @@
 package internal
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 )
 
 const (
@@ -33,7 +33,7 @@ func ReportAndExit(err error, format string) error {
 	}
 
 	if format == FormatJSON {
-		out, marshalErr := Encoding.Marshal(ErrorResponse{Error: err.Error()})
+		out, marshalErr := json.Marshal(ErrorResponse{Error: err.Error()})
 		if marshalErr == nil {
 			fmt.Fprintln(os.Stdout, string(out))
 		} else {
@@ -54,7 +54,7 @@ func ReportAndExit(err error, format string) error {
 // is typed to DecryptResponse) — used by offer/accept/finish/init so every
 // subcommand emits the same single-line-JSON contract for --format json.
 func WriteJSONResponse(response interface{}) error {
-	out, err := Encoding.Marshal(response)
+	out, err := json.Marshal(response)
 	if err != nil {
 		return err
 	}

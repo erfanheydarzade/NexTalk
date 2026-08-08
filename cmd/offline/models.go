@@ -1,62 +1,71 @@
 package offline
 
+// The types below are the CLI's own request/response shapes, not wire
+// packets: they are marshalled with encoding/json for `--format json`.
+// They deliberately carry no `bin:"N"` tags, so nanopack's bingen skips
+// them — only crypto.SecureMessage is a real nanopack packet.
+//
+// Since they have no `json:"..."` tags either, the JSON keys are the
+// exported Go field names (ID, Envelope, Sender, ...). Programmatic
+// consumers depend on that casing.
+
 type Envelope struct {
-	Type string `bin:"0"`
-	Data []byte `bin:"1"`
+	Type string
+	Data []byte
 }
 
 type InitResponse struct {
-	ID string `bin:"0"`
+	ID string
 }
 
 type OfferResponse struct {
-	RemotePeer string `bin:"0"`
-	Envelope   string `bin:"1"`
-	Encoding   string `bin:"2"`
+	RemotePeer string
+	Envelope   string
+	Encoding   string
 }
 
 type AcceptResponse struct {
-	Envelope string `bin:"0"`
-	Encoding string `bin:"1"`
+	Envelope string
+	Encoding string
 }
 
 type FinishResponse struct {
-	PeerID string `bin:"0"`
+	PeerID string
 }
 
 type EncryptResponse struct {
-	Type     string `bin:"0"`
-	Envelope string `bin:"1"`
+	Type     string
+	Envelope string
 }
 
 type DecryptResponse struct {
-	Sender   string `bin:"0"`
-	Encoding string `bin:"1"`
-	Message  string `bin:"2"`
+	Sender   string
+	Encoding string
+	Message  string
 }
 
 type AcceptRequest struct {
-	ID            string `bin:"0"`
-	OfferEnvelope string `bin:"1"`
+	ID            string
+	OfferEnvelope string
 }
 
 type DecryptRequest struct {
-	ID         string `bin:"0"`
-	CipherText string `bin:"1"`
+	ID         string
+	CipherText string
 }
 
 type EncryptRequest struct {
-	ID         string `bin:"0"`
-	RemotePeer string `bin:"1"`
-	Message    string `bin:"2"`
+	ID         string
+	RemotePeer string
+	Message    string
 }
 
 type FinishRequest struct {
-	ID             string `bin:"0"`
-	AnswerEnvelope string `bin:"1"`
+	ID             string
+	AnswerEnvelope string
 }
 
 type OfferRequest struct {
-	ID         string `bin:"0"`
-	RemotePeer string `bin:"1"`
+	ID         string
+	RemotePeer string
 }

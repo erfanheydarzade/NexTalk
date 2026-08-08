@@ -1,6 +1,7 @@
 package offline
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal"
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"github.com/spf13/cobra"
 )
 
@@ -99,7 +99,7 @@ func RunAccept(opts AcceptOptions) error {
 	}
 
 	var env Envelope
-	if err := Encoding.Unmarshal(data, &env); err != nil {
+	if err := json.Unmarshal(data, &env); err != nil {
 		return fmt.Errorf("failed to parse offer envelope: %w", err)
 	}
 
@@ -109,7 +109,7 @@ func RunAccept(opts AcceptOptions) error {
 	}
 
 	response := Envelope{Type: "answer", Data: answerBytes}
-	output, err := Encoding.Marshal(response)
+	output, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("failed to encode answer envelope: %w", err)
 	}

@@ -1,6 +1,7 @@
 package offline
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal"
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"github.com/spf13/cobra"
 )
 
@@ -82,7 +82,7 @@ func RunOffer(opts OfferOptions) error {
 	}
 
 	env := Envelope{Type: "offer", Data: offerBytes}
-	envBytes, err := Encoding.Marshal(env)
+	envBytes, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("failed to encode offer envelope: %w", err)
 	}

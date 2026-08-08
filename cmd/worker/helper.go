@@ -1,13 +1,13 @@
 package worker
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 )
 
 // Output format constants — same contract as the offline package: "human"
@@ -61,7 +61,7 @@ func reportAndExit(err error, format string) error {
 // writeJSON writes v as a single JSON line to stdout — the only thing a
 // programmatic consumer should ever need to parse.
 func writeJSON(v interface{}) error {
-	output, err := Encoding.Marshal(v)
+	output, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package offline
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,6 @@ import (
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
-	Encoding "github.com/erfanheydarzade/NexTalk/internal/encoding"
 	"github.com/spf13/cobra"
 )
 
@@ -192,7 +192,7 @@ func sourceLabel(inputFile string) string {
 // writeJSON writes the response as a single JSON line to stdout — this is
 // the only thing programmatic consumers should ever need to parse.
 func writeJSON(response DecryptResponse) error {
-	output, err := Encoding.Marshal(response)
+	output, err := json.Marshal(response)
 	if err != nil {
 		return err
 	}
