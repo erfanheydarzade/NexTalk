@@ -36,8 +36,10 @@ client/             → Peer identity state + persistent session storage (JSON f
 transport/          → Raw relay adapters: Cloudflare KV (worker.go), S3 (proxy.go)
 
 internal/
+  codec/            → Input/output encoding helpers (raw, b64, hex)
   config/           → Environment config loader (.env)
-  encoding/         → Base64 utilities
+  contacts/         → Global contact store
+  registry/         → Transport registry
   relay/            → Transport adapter interfaces
     worker/         → Cloudflare Worker adapter
     proxy/          → S3/proxy adapter
@@ -118,7 +120,12 @@ Each message is encrypted with **XChaCha20-Poly1305**:
 
 ---
 
-## Envelope Format
+## Wire Formats
+
+Handshake traffic and transport envelopes are JSON; encrypted message frames are
+binary [nanopack](https://github.com/erfanheydarzade/nanopack) payloads.
+
+### Transport envelope (JSON)
 
 All transports (offline CLI, worker, proxy) exchange structured JSON envelopes:
 
@@ -127,6 +134,34 @@ All transports (offline CLI, worker, proxy) exchange structured JSON envelopes:
 ```
 
 The `data` field always contains the decoded payload as a JSON object — never a string. The transport layer does not interpret payload semantics.
+
+### Message frame (nanopack)
+
+`crypto.SecureMessage` is tagged for nanopack code generation, so field *names*
+never travel on the wire — only one-byte IDs, and the nonce as 8 raw big-endian
+bytes rather than ASCII digits:
+
+| ID | Field | Contents |
+|----|-------|----------|
+| 1 | `SenderID` | sender's peer ID |
+| 2 | `RatchetKey` | sender's current ratchet DH public key |
+| 3 | `Nonce` | message counter, `uint64` big-endian |
+| 4 | `Ciphertext` | ChaCha20-Poly1305 ciphertext |
+| 5 | `Tag` | HMAC-SHA3-256 over the canonical form of fields 1–4 |
+
+Fields 1–4 are exactly what the HMAC authenticates, so the canonical payload is
+just the generated `MarshalBinID` output with no re-marshalling tricks; the tag
+is appended after it. Frames are sent without nanopack's `WrapPacket` envelope
+(magic byte + CRC), since every transport here already frames reliably.
+
+After changing the tags on `SecureMessage`, regenerate the marshal code:
+
+```bash
+go run github.com/erfanheydarzade/nanopack/cmd/bingen
+```
+
+That rewrites `crypto/kex_hybrid_nanopack.go` in place. Field IDs are the wire
+contract — renumbering them breaks compatibility with already-deployed peers.
 
 ---
 
@@ -571,12 +606,55 @@ After selecting a transport, you enter a persistent shell:
 | `send <peer_id> <msg>` | Encrypt a message and dispatch it to the relay |
 | `mailbox` | List all active peer chats with unread indicators |
 | `mailbox <peer_id>` | Read messages from a specific peer (marks as read) |
+| `peers` | List every peer ID the shell can Tab-complete |
 | `switch` / `exit` | Return to the main transport selector |
 
 The `listen` command handles the full handshake automatically:
 - Incoming **offer** → auto-accept and send answer
 - Incoming **answer** → auto-finish and activate session
 - Incoming **message** → decrypt and store in mailbox
+
+---
+
+## Shell Tab Completion
+
+Peer IDs are 44-character base58 strings, so the shell completes them for you.
+Press `Tab` once to complete; press it twice to list every candidate.
+
+**Commands** complete in the first word position, per transport — offline mode
+offers `offer`/`accept`/`finish`/`decrypt`, worker mode offers
+`connect`/`listen`/`send`, and aliases (`send`/`encrypt`) both work.
+
+**Peer IDs** complete in any `<peer>` argument slot. A peer becomes completable
+the moment it is seen, from either direction:
+
+| You did this | Result |
+|--------------|--------|
+| `connect <peer_id>` / `offer <peer_id>` | That peer completes for you from then on |
+| `listen` received an offer | The sender completes — no need to copy their ID |
+| `listen` received a message | The sender completes |
+| `load <id>` | Every peer in that identity's saved sessions completes |
+| `contacts add <name> <id>` | The alias completes and resolves to the ID |
+
+So the two-party flow needs no ID copying after the first `connect`:
+
+```
+# Peer A
+╰─❯ connect t1dAbC...            ← the only time you paste a full ID
+╰─❯ send t<Tab> hello            ← expands to the full ID
+
+# Peer B
+╰─❯ listen                       ← receives A's offer
+╰─❯ send <Tab> hi back           ← A's ID is already there
+```
+
+**Prefixes work in commands too**, not just in completion: `send t1d hello`
+resolves `t1d` to the full ID. If a prefix matches more than one known peer the
+command refuses with an "ambiguous peer prefix" error rather than guessing, so a
+truncated ID can never send a message to the wrong peer.
+
+**Identities** complete in `load <id>` from the `<id>.json` profiles in the
+current directory. Run `peers` to see everything currently completable.
 
 ---
 
