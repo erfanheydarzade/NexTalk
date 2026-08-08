@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/chzyer/readline v1.5.1
 	github.com/cloudflare/circl v1.6.3
+	github.com/erfanheydarzade/nanopack v0.0.0-20260803202134-c434113d4177
 	github.com/joho/godotenv v1.5.1
 	github.com/mr-tron/base58 v1.3.0
 	github.com/spf13/cobra v1.10.2

@@ -82,11 +82,21 @@ def build_binary() -> str:
 class Result:
     """Outcome of a single CLI invocation."""
 
-    def __init__(self, argv: list[str], code: int, out: str, err: str) -> None:
+    def __init__(
+        self,
+        argv: list[str],
+        code: int,
+        out: str,
+        err: str,
+        raw_stdout: bytes = b"",
+    ) -> None:
         self.argv = argv
         self.code = code
         self.stdout = out
         self.stderr = err
+        # Undecoded stdout: nanopack frames are binary, so tests that assert on
+        # raw wire bytes must not go through the lossy utf-8 "replace" decode.
+        self.raw_stdout = raw_stdout
 
     @property
     def ok(self) -> bool:
@@ -114,48 +124,89 @@ class Result:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Wire-format helpers (binmodel v1, see internal/encoding/legacy.go)
+# Wire-format helpers (nanopack, github.com/erfanheydarzade/nanopack)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-#   field   := name ":" base64(value)
-#   payload := field ("," field)*
+#   payload := [fieldCount byte] ([fieldID byte][varint length])*count <data...>
 #
-# A SecureMessage frame carries the fields s, k, n, c, t (in that order):
-#   s = sender peer ID      k = sender's ratchet DH public key
-#   n = ASCII decimal nonce c = ChaCha20-Poly1305 ciphertext
-#   t = HMAC-SHA3-256 tag over the tag-free canonical form (s,k,n,c)
+# Field names never travel on the wire — only the 1-byte IDs from
+# crypto.SecureMessage's `bin:"N"` tags, mirrored here:
+#   s = sender peer ID (1)      k = sender's ratchet DH public key (2)
+#   n = nonce, 8 bytes BE (3)   c = ChaCha20-Poly1305 ciphertext (4)
+#   t = HMAC-SHA3-256 tag over the tag-free canonical form s,k,n,c (5)
+#
+# The frame carries no nanopack envelope (no magic/CRC): the CLI hands one
+# whole payload to the transport, which already frames it.
 
+FIELD_IDS = {"s": 1, "k": 2, "n": 3, "c": 4, "t": 5}
+FIELD_NAMES = {v: k for k, v in FIELD_IDS.items()}
 HMAC_FIELDS = ("s", "k", "n", "c")
 
 
+def nonce_bytes(n: int) -> bytes:
+    """Encode a nonce the way nanopack's AddUint64ID does: 8 bytes big-endian."""
+    return n.to_bytes(8, "big")
+
+
+def _read_varint(buf: bytes, i: int) -> tuple[int, int]:
+    value = shift = 0
+    while True:
+        byte = buf[i]
+        i += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, i
+        shift += 7
+
+
+def _append_varint(out: bytearray, v: int) -> None:
+    while v >= 0x80:
+        out.append((v & 0x7F) | 0x80)
+        v >>= 7
+    out.append(v)
+
+
 def parse_frame(cipher_b64: str) -> tuple[dict[str, bytes], list[str]]:
-    """Decode a base64 SecureMessage frame into {field: raw bytes} + field order."""
-    wire = base64.b64decode(cipher_b64).decode("ascii")
+    """Decode a base64 nanopack SecureMessage frame into {field: raw bytes} + order."""
+    wire = base64.b64decode(cipher_b64)
+    count = wire[0]
+    i = 1
+    lengths: list[tuple[int, int]] = []
+    for _ in range(count):
+        fid = wire[i]
+        i += 1
+        length, i = _read_varint(wire, i)
+        lengths.append((fid, length))
+
     fields: dict[str, bytes] = {}
     order: list[str] = []
-    for chunk in wire.split(","):
-        name, _, value = chunk.partition(":")
-        if not _:
-            raise ValueError(f"malformed frame field: {chunk!r}")
-        fields[name] = base64.b64decode(value)
+    for fid, length in lengths:
+        name = FIELD_NAMES.get(fid, str(fid))
+        fields[name] = wire[i:i + length]
         order.append(name)
+        i += length
     return fields, order
+
+
+def build_payload(fields: dict[str, bytes], order: list[str]) -> bytes:
+    """Encode fields into a raw nanopack payload, in the given field order."""
+    out = bytearray([len(order)])
+    for name in order:
+        out.append(FIELD_IDS[name])
+        _append_varint(out, len(fields[name]))
+    for name in order:
+        out += fields[name]
+    return bytes(out)
 
 
 def build_frame(fields: dict[str, bytes], order: list[str]) -> str:
     """Re-encode a frame back to the base64 form the CLI accepts via --in b64."""
-    wire = ",".join(
-        f"{name}:{base64.b64encode(fields[name]).decode('ascii')}" for name in order
-    )
-    return base64.b64encode(wire.encode("ascii")).decode("ascii")
+    return base64.b64encode(build_payload(fields, order)).decode("ascii")
 
 
 def canonical_tag(fields: dict[str, bytes], hmac_key: bytes) -> bytes:
     """Recompute the frame's authentication tag: HMAC-SHA3-256 over (s,k,n,c)."""
-    canonical = ",".join(
-        f"{name}:{base64.b64encode(fields[name]).decode('ascii')}"
-        for name in HMAC_FIELDS
-    ).encode("ascii")
+    canonical = build_payload(fields, list(HMAC_FIELDS))
     return hmac.new(hmac_key, canonical, hashlib.sha3_256).digest()
 
 
@@ -185,6 +236,7 @@ class NexTalkCase(unittest.TestCase):
             proc.returncode,
             proc.stdout.decode("utf-8", "replace"),
             proc.stderr.decode("utf-8", "replace"),
+            proc.stdout,
         )
 
     def cli_ok(self, *args: str, stdin: bytes | None = None) -> Result:
@@ -332,7 +384,11 @@ class NexTalkHappyPath(NexTalkCase):
             "offline", "encrypt", "-i", alice, "-r", bob, "-m", "raw path",
             "--out", "raw",
         )
-        self.assertTrue(res.stdout.startswith("s:"), f"unexpected raw frame: {res!r}")
+        # A raw nanopack payload starts with its field count (5: s,k,n,c,t),
+        # then the first field's ID (1 = sender) — not printable ASCII.
+        self.assertEqual(
+            res.raw_stdout[:2], b"\x05\x01", f"unexpected raw frame: {res!r}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +534,7 @@ class NexTalkTamperedCiphertext(NexTalkCase):
         alice, bob = self.handshake()
         fields, order = parse_frame(self.encrypt(alice, bob, "nonce target"))
 
-        fields["n"] = b"7"
+        fields["n"] = nonce_bytes(7)
         res = self.decrypt_fail(bob, build_frame(fields, order))
         self.assertIn("invalid authentication tag", res.error, repr(res))
 
@@ -506,7 +562,7 @@ class NexTalkTamperedCiphertext(NexTalkCase):
     def test_garbage_input_rejected(self):
         """A non-frame payload is refused cleanly, not with a crash."""
         alice, bob = self.handshake()
-        junk = base64.b64encode(b"not a binmodel frame at all").decode()
+        junk = base64.b64encode(b"not a nanopack frame at all").decode()
         res = self.decrypt_fail(bob, junk)
         self.assertTrue(res.error)
         # Cobra's own usage/error text must never leak (SilenceErrors/SilenceUsage).
@@ -710,7 +766,9 @@ class NexTalkRatchetAdvancement(NexTalkCase):
             len(set(ciphertexts)), len(ciphertexts),
             "repeating a plaintext must not repeat the ciphertext",
         )
-        nonces = [int(parse_frame(f)[0]["n"]) for f in frames]
+        nonces = [
+            int.from_bytes(parse_frame(f)[0]["n"], "big") for f in frames
+        ]
         self.assertEqual(nonces, [0, 1, 2, 3], "nonce must increment monotonically")
 
         for frame, expected in zip(frames, ["same text"] * 4):

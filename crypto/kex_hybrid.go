@@ -10,11 +10,10 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/cloudflare/circl/sign/dilithium/mode3"
-	"github.com/erfanheydarzade/NexTalk/internal/encoding"
+	"github.com/erfanheydarzade/nanopack"
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
@@ -36,18 +35,35 @@ func keyLabel(key []byte) string {
 }
 
 // SecureMessage represents an encrypted transport unit in the system.
-// Tag is intentionally excluded from the default bin.Marshal path (bin:"-")
-// so that hmacPayload() can produce a stable canonical form without any
-// nil-then-re-marshal tricks.
+//
+// The `bin:"N"` tags drive nanopack code generation (see
+// kex_hybrid_nanopack.go, produced by `go run
+// github.com/erfanheydarzade/nanopack/cmd/bingen`). Only the four
+// authenticated fields carry tags, so the generated MarshalBinID emits
+// exactly the tag-free canonical form the HMAC is computed over —
+// secureMessageHmacPayload needs no nil-then-re-marshal tricks.
+//
+// Tag is deliberately untagged: it is appended to the wire frame after the
+// canonical body under secureMessageFieldTag. RequestKey/AcceptedKey are
+// handshake fields transported outside the ratchet frame and never travel
+// in a SecureMessage.
+//
+//nanopack:schema id=1
 type SecureMessage struct {
-	SenderID    string `bin:"0"`
-	RatchetKey  []byte `bin:"1"`
-	Nonce       int    `bin:"2"`
-	Ciphertext  []byte `bin:"3"`
-	Tag         []byte `bin:"-"`
-	RequestKey  []byte `bin:"4"`
-	AcceptedKey []byte `bin:"5"`
+	SenderID   string `bin:"1"`
+	RatchetKey []byte `bin:"2"`
+	Nonce      uint64 `bin:"3"`
+	Ciphertext []byte `bin:"4"`
+
+	Tag         []byte
+	RequestKey  []byte
+	AcceptedKey []byte
 }
+
+// secureMessageFieldTag is the wire field ID of the HMAC tag. It continues
+// the numbering of the generated SecureMessageField* constants and must not
+// collide with them.
+const secureMessageFieldTag uint8 = 5
 
 // SecurePeer holds the full cryptographic state of a participant.
 type SecurePeer struct {
@@ -376,21 +392,61 @@ func (sp *SecurePeer) DhRatchet(remoteKey []byte) {
 	sp.pendingDhRatchet = true
 }
 
+// maxWireNonce bounds a nonce read off the wire before it is narrowed to
+// the int used by the ratchet counters, so a hostile 64-bit value can never
+// wrap negative on a 32-bit build.
+const maxWireNonce = uint64(1) << 31
+
 // secureMessageHmacPayload encodes the tag-free canonical form used for HMAC
-// computation. Field order here is part of the wire contract — do not reorder.
-// RequestKey and AcceptedKey are deliberately excluded: they are handshake
-// fields transported outside the ratchet frame.
-func secureMessageHmacPayload(msg *SecureMessage) []byte {
-	return encoding.NewEncoder().
-		AddString("s", msg.SenderID).
-		Add("k", msg.RatchetKey).
-		Add("n", []byte(strconv.Itoa(msg.Nonce))).
-		Add("c", msg.Ciphertext).
-		Bytes()
+// computation. It is exactly the generated MarshalBinID output — field IDs and
+// their order are part of the wire contract, so do not reorder the tagged
+// fields in SecureMessage. Tag, RequestKey and AcceptedKey are excluded:
+// the tag authenticates this payload, and the two key fields are handshake
+// material transported outside the ratchet frame.
+func secureMessageHmacPayload(msg *SecureMessage) ([]byte, error) {
+	return nanopack.MarshalFastID(msg)
+}
+
+// parseSecureMessage decodes a wire frame produced by Encrypt back into a
+// SecureMessage. The four authenticated fields are handled by the generated
+// UnmarshalBinID; the tag is read separately since it is deliberately outside
+// the canonical HMAC payload.
+func parseSecureMessage(payloadBytes []byte) (*SecureMessage, error) {
+	fields, err := nanopack.DecodeID(payloadBytes)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing message frame: %w", err)
+	}
+
+	var msg SecureMessage
+	if err := msg.UnmarshalBinID(fields); err != nil {
+		return nil, fmt.Errorf("error parsing message frame: %w", err)
+	}
+	for _, f := range fields {
+		if f.ID == secureMessageFieldTag {
+			msg.Tag = f.Data
+		}
+	}
+
+	if msg.Nonce >= maxWireNonce {
+		return nil, fmt.Errorf("nonce %d out of range", msg.Nonce)
+	}
+	return &msg, nil
+}
+
+// SenderIDFromFrame reads just the sender ID out of a wire frame, without
+// verifying it. Callers use it to pick which session should attempt the
+// decrypt; the sender is only trustworthy once Decrypt validates the HMAC
+// under that session's key.
+func SenderIDFromFrame(payloadBytes []byte) (string, error) {
+	msg, err := parseSecureMessage(payloadBytes)
+	if err != nil {
+		return "", err
+	}
+	return msg.SenderID, nil
 }
 
 // Encrypt produces an authenticated encrypted message using the send ratchet.
-func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
+func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) ([]byte, error) {
 	var mk []byte
 	var currentDhPublic []byte
 
@@ -423,7 +479,10 @@ func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 		currentDhPublic = sp.DhPublic
 	}
 
-	cipher, _ := chacha20poly1305.NewX(mk)
+	cipher, err := chacha20poly1305.NewX(mk)
+	if err != nil {
+		return nil, err
+	}
 	nonce := IntToBytes(sp.SendNonce, 24)
 	aad := make([]byte, 0, len(currentDhPublic)+8)
 	aad = append(aad, currentDhPublic...)
@@ -434,27 +493,32 @@ func (sp *SecurePeer) Encrypt(senderName string, plaintext []byte) []byte {
 	msg := SecureMessage{
 		SenderID:   senderName,
 		RatchetKey: currentDhPublic,
-		Nonce:      sp.SendNonce,
+		Nonce:      uint64(sp.SendNonce),
 		Ciphertext: ciphertext,
 	}
 
 	// Compute HMAC over the tag-free canonical payload.
-	canonical := secureMessageHmacPayload(&msg)
+	canonical, err := secureMessageHmacPayload(&msg)
+	if err != nil {
+		return nil, fmt.Errorf("encoding canonical payload: %w", err)
+	}
 	mac := hmac.New(sha3.New256, sp.HmacKey)
 	mac.Write(canonical)
 	msg.Tag = mac.Sum(nil)
 
 	// Wire frame: same fields as canonical + tag appended last.
-	wire := encoding.NewEncoder().
-		AddString("s", msg.SenderID).
-		Add("k", msg.RatchetKey).
-		Add("n", []byte(strconv.Itoa(msg.Nonce))).
-		Add("c", msg.Ciphertext).
-		Add("t", msg.Tag).
-		Bytes()
+	var enc nanopack.Encoder
+	if err := msg.MarshalBinID(&enc); err != nil {
+		return nil, fmt.Errorf("encoding message frame: %w", err)
+	}
+	enc.AddID(secureMessageFieldTag, msg.Tag)
+	wire, err := enc.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("encoding message frame: %w", err)
+	}
 
 	sp.SendNonce++
-	return wire
+	return wire, nil
 }
 
 func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPub []byte) bool {
@@ -478,27 +542,16 @@ func (sp *SecurePeer) VerifyCiphertext(mk []byte, n int, ciphertext []byte, dhPu
 // Decrypt validates and decrypts an incoming SecureMessage.
 // Returns (senderID, plaintext, error).
 func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
-	// Parse the binmodel wire frame.
-	fields, err := encoding.Decode(payloadBytes)
+	msg, err := parseSecureMessage(payloadBytes)
 	if err != nil {
-		return "", nil, fmt.Errorf("error parsing binmodel message: %v", err)
-	}
-
-	nonce, err := strconv.Atoi(string(fields["n"]))
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid nonce field: %v", err)
-	}
-
-	msg := SecureMessage{
-		SenderID:   string(fields["s"]),
-		RatchetKey: fields["k"],
-		Nonce:      nonce,
-		Ciphertext: fields["c"],
-		Tag:        fields["t"],
+		return "", nil, err
 	}
 
 	// Verify HMAC over the tag-free canonical form.
-	canonical := secureMessageHmacPayload(&msg)
+	canonical, err := secureMessageHmacPayload(msg)
+	if err != nil {
+		return "", nil, fmt.Errorf("encoding canonical payload: %w", err)
+	}
 	mac := hmac.New(sha3.New256, sp.HmacKey)
 	mac.Write(canonical)
 	calculatedTag := mac.Sum(nil)
@@ -507,21 +560,25 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 		return "", nil, fmt.Errorf("invalid authentication tag ❌")
 	}
 
+	// The ratchet counters are ints; msg.Nonce was already bounded by
+	// parseSecureMessage so this narrowing cannot go negative.
+	nonce := int(msg.Nonce)
+
 	if lowSecurity {
-		info := IntToBytes(msg.Nonce, 8)
+		info := IntToBytes(nonce, 8)
 		h := hkdf.Expand(sha256.New, sp.RecvCk, info)
 		mk := make([]byte, 32)
 		io.ReadFull(h, mk)
 
-		plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
+		plaintext, err := sp.DecryptWithKey(mk, nonce, msg.Ciphertext, msg.RatchetKey)
 		return msg.SenderID, plaintext, err
 	}
 
 	// Check skipped-message cache first.
-	skipKeyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(msg.RatchetKey), msg.Nonce)
+	skipKeyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(msg.RatchetKey), nonce)
 	if mk, exists := sp.SkippedMessages[skipKeyStr]; exists {
 		delete(sp.SkippedMessages, skipKeyStr)
-		plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
+		plaintext, err := sp.DecryptWithKey(mk, nonce, msg.Ciphertext, msg.RatchetKey)
 		return msg.SenderID, plaintext, err
 	}
 
@@ -534,13 +591,13 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 	}
 
 	// Reject replays / messages from a past epoch.
-	if msg.Nonce < sp.RecvNonce {
+	if nonce < sp.RecvNonce {
 		return "", nil, fmt.Errorf("replay attack or message too old (N=%d, expected >= %d)",
-			msg.Nonce, sp.RecvNonce)
+			nonce, sp.RecvNonce)
 	}
 
 	// Advance chain key, stashing keys for any gaps (out-of-order delivery).
-	for sp.RecvNonce < msg.Nonce {
+	for sp.RecvNonce < nonce {
 		nextCk, mk := RatchetStep(sp.RecvCk)
 		sp.RecvCk = nextCk
 		keyStr := sp.getSkipKeyStr(base64.StdEncoding.EncodeToString(sp.RemoteDhPublic), sp.RecvNonce)
@@ -555,7 +612,7 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 	sp.RecvCk = nextCk
 	sp.RecvNonce++
 
-	plaintext, err := sp.DecryptWithKey(mk, msg.Nonce, msg.Ciphertext, msg.RatchetKey)
+	plaintext, err := sp.DecryptWithKey(mk, nonce, msg.Ciphertext, msg.RatchetKey)
 	return msg.SenderID, plaintext, err
 }
 
