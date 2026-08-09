@@ -108,7 +108,7 @@ jobs:
       - name: Build WASM bundle
         run: |
           set -euo pipefail
-          NEXTALK_VERSION="${RELEASE_TAG}" ./cmd/nextalk-wasm/build.sh dist-wasm/web/wasm
+          NEXTALK_VERSION="${RELEASE_TAG}" bash ./cmd/nextalk-wasm/build.sh dist-wasm/web/wasm
           cp web/index.html dist-wasm/web/index.html
           cp README.md LICENSE dist-wasm/
           cp -r docs dist-wasm/docs
