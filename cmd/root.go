@@ -30,6 +30,12 @@ var versionCmd = &cobra.Command{
 }
 
 func Execute() error {
+	// Cobra's default behavior on Windows is to detect when the binary was
+	// double-clicked from Explorer and print its own "This is a command
+	// line tool..." splash before exiting — this runs *before* rootCmd.Run
+	// ever gets a chance to fire. We want double-clicking to fall through
+	// to our own shell instead, so disable that built-in splash.
+	cobra.MousetrapHelpText = ""
 	return rootCmd.Execute()
 }
 
@@ -50,4 +56,11 @@ func init() {
 	cmdcontact.Register(rootCmd)
 
 	rootCmd.AddCommand(versionCmd)
+
+	// No subcommand given (e.g. the exe was double-clicked from Explorer
+	// instead of run via `nextalk shell`) -> just launch the interactive
+	// shell instead of printing help and exiting immediately.
+	rootCmd.Run = func(cmd *cobra.Command, args []string) {
+		cmdgui.RunGUI(engine, cfg)
+	}
 }
