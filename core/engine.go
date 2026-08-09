@@ -40,13 +40,13 @@ func (e *Engine) newPeer(
 	idPriv ed25519.PrivateKey,
 	idPub ed25519.PublicKey,
 	dilPriv, dilPub []byte,
-) *crypto.SecurePeer {
+) (*crypto.SecurePeer, error) {
 	privX, pubX := crypto.GenerateX25519KeyPair()
 	dhPrivX, dhPubX := crypto.GenerateX25519KeyPair()
 
 	pqcPubObj, pqcPrivObj, err := kyber768.GenerateKeyPair(rand.Reader)
 	if err != nil {
-		panic(fmt.Sprintf("kyber768 keygen: %v", err))
+		return nil, fmt.Errorf("kyber768 keygen: %w", err)
 	}
 	pqcPubBytes, _ := pqcPubObj.MarshalBinary()
 	pqcPrivBytes, _ := pqcPrivObj.MarshalBinary()
@@ -65,7 +65,7 @@ func (e *Engine) newPeer(
 		PqcSignPublic:    dilPub,
 		SkippedMessages:  make(map[string][]byte),
 		SeenOffers:       make(map[string]bool),
-	}
+	}, nil
 }
 
 // ── Step 1 ───────────────────────────────────────────────────────────────────
@@ -84,7 +84,10 @@ func (e *Engine) CreateOffer(
 	dilPriv, dilPub []byte,
 	peerId string,
 ) (peer *crypto.SecurePeer, offerJSON []byte, err error) {
-	peer = e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
+	peer, err = e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	peerIdBytes, err := base58.Decode(peerId)
 	if err != nil {
@@ -154,7 +157,10 @@ func (e *Engine) AcceptOffer(
 		}
 	}
 
-	responderPeer := e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
+	responderPeer, err := e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
+	if err != nil {
+		return "", nil, nil, err
+	}
 
 	// Carry forward seen-offer history so re-keying doesn't lose replay protection.
 	if existing, exists := existingSessions[offer.SenderId]; exists && existing.SeenOffers != nil {
