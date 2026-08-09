@@ -1,0 +1,104 @@
+# GoReleaser config for NexTalk.
+#
+# Builds the `nextalk` CLI for every supported OS/arch, packages each as a
+# .tar.gz (.zip on Windows), generates checksums, and writes a changelog
+# from Conventional-Commit-style commit messages. The WASM build is NOT
+# handled here (GoReleaser's build matrix doesn't fit GOOS=js/GOARCH=wasm
+# well) — it's built and archived as an extra release asset by
+# .github/workflows/release.yml, which calls `cmd/nextalk-wasm/build.sh`
+# directly and uploads the result alongside these archives.
+#
+# Local test run (no publish): goreleaser release --snapshot --clean
+version: 2
+
+project_name: nextalk
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: nextalk
+    main: ./cmd/nextalk
+    binary: nextalk
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/erfanheydarzade/NexTalk/internal/buildinfo.Version={{.Version}}
+      - -X github.com/erfanheydarzade/NexTalk/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/erfanheydarzade/NexTalk/internal/buildinfo.Date={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # darwin/arm and windows/arm are not meaningful targets.
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: nextalk-archive
+    ids: [nextalk]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - docs/**
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  # A concise, human-clean release body instead of the raw commit log:
+  # grouped by type, with merge commits and CI noise filtered out.
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^Merge pull request"
+      - "^Merge branch"
+      - "^ci:"
+      - "^chore\\(deps\\):"
+  groups:
+    - title: "Features"
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: "Fixes"
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: "Documentation"
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: "Other"
+      order: 999
+
+release:
+  name_template: "NexTalk {{ .Version }}"
+  header: |
+    ## NexTalk {{ .Version }}
+
+    Prebuilt binaries for Linux, macOS and Windows are below, plus a
+    browser/WebAssembly build (`nextalk-wasm_{{ .Version }}.tar.gz`,
+    uploaded separately by the release workflow). See
+    [`docs/wasm.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/wasm.md)
+    for how to run the WASM build, and
+    [`docs/adding-a-transport.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/adding-a-transport.md)
+    to add a new transport backend.
+  footer: |
+    **Full Changelog**: https://github.com/erfanheydarzade/NexTalk/compare/{{ .PreviousTag }}...{{ .Tag }}

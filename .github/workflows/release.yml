@@ -1,0 +1,147 @@
+name: Release
+
+# Push a button instead of tagging-and-waiting: run this from the Actions
+# tab (Run workflow) and choose a version. It tags that version, builds
+# nextalk for every supported OS/arch as .tar.gz/.zip archives, builds the
+# WASM bundle, and publishes everything as one GitHub Release with an
+# auto-generated changelog.
+#
+# Re-running this workflow for a version that's already released is safe:
+# the "Tag release" step is a no-op if the tag already exists, and
+# goreleaser + the release action simply update the existing release's
+# assets/notes rather than failing.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to release, e.g. v1.4.0 (must start with "v" and follow
+          semver). Leave the "prerelease" box checked for a beta/rc build.
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this as a pre-release (not shown as 'latest')"
+        required: false
+        type: boolean
+        default: false
+  # Also supports the traditional `git tag vX.Y.Z && git push --tags` flow
+  # for anyone who prefers that over the manual button.
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Validate version input
+        id: resolve
+        run: |
+          version="${{ inputs.version }}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a valid semver tag (expected e.g. v1.4.0 or v1.4.0-rc.1)"
+            exit 1
+          fi
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag (no-op if it already exists)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          tag="${{ steps.resolve.outputs.tag }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists, reusing it."
+          else
+            git tag -a "$tag" -m "Release $tag"
+            git push origin "$tag"
+          fi
+
+  release:
+    name: Build & publish
+    needs: [tag]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # --- CLI: linux/darwin/windows x amd64/arm64(/armv7) -> tar.gz/zip ---
+      - name: Run GoReleaser (CLI archives)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
+
+      # --- Browser/WASM bundle: nextalk.wasm + wasm_exec.js + the demo page ---
+      - name: Build WASM bundle
+        run: |
+          set -euo pipefail
+          NEXTALK_VERSION="${RELEASE_TAG}" ./cmd/nextalk-wasm/build.sh dist-wasm/web/wasm
+          cp web/index.html dist-wasm/web/index.html
+          cp README.md LICENSE dist-wasm/
+          cp -r docs dist-wasm/docs
+          cat > dist-wasm/README-WASM.txt <<'EOF'
+          NexTalk WebAssembly bundle
+          ===========================
+          web/index.html        two-tab browser demo, talks to itself over
+                                 the worker relay (see docs/wasm.md)
+          web/wasm/nextalk.wasm the compiled Go/wasm module
+          web/wasm/wasm_exec.js the matching Go JS glue (do not mix versions
+                                 from a different Go release)
+
+          This must be served over HTTP, not opened as a file:// URL —
+          browsers block WebAssembly's streaming instantiation and ES module
+          fetches under file://. From this bundle's root:
+
+              python3 -m http.server 8000
+
+          then open http://localhost:8000/web/ — see docs/wasm.md for
+          details and the full JS API.
+          EOF
+          tar -C dist-wasm -czf "nextalk-wasm_${RELEASE_TAG}.tar.gz" .
+
+      - name: Upload WASM bundle to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${RELEASE_TAG}" "nextalk-wasm_${RELEASE_TAG}.tar.gz" \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: Mark pre-release if requested
+        if: github.event_name == 'workflow_dispatch' && inputs.prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${RELEASE_TAG}" --repo "${{ github.repository }}" --prerelease

@@ -175,6 +175,16 @@ go build -o nextalk.exe ./cmd/nextalk
 
 Requires Go 1.21+. Dependencies are managed via `go.mod`.
 
+### Prebuilt binaries
+
+Prebuilt `nextalk` archives (Linux/macOS/Windows, amd64/arm64/armv7) and a
+ready-to-serve WebAssembly bundle are published on the
+[Releases page](https://github.com/erfanheydarzade/NexTalk/releases) for
+every tagged version — see [`docs/RELEASING.md`](docs/RELEASING.md) for
+how those get built. For the browser build specifically, see
+[`docs/wasm.md`](docs/wasm.md), including why it must be served over
+HTTP (`python3 -m http.server`) rather than opened as a `file://` URL.
+
 ---
 
 ## CLI Usage — Offline Mode
