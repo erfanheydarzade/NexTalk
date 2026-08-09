@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>NexTalk / wasm demo</title>
+  <style>
+    body {
+      font-family: ui-monospace, monospace;
+      max-width: 860px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    fieldset {
+      margin-bottom: 1rem;
+    }
+
+    input,
+    button {
+      font: inherit;
+    }
+
+    input[type=text] {
+      width: 22rem;
+    }
+
+    #log {
+      white-space: pre-wrap;
+      background: #111;
+      color: #0f0;
+      padding: 0.75rem;
+      height: 16rem;
+      overflow-y: auto;
+    }
+
+    .row {
+      margin: 0.4rem 0;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>NexTalk — wasm demo</h1>
+  <p>Open this page in two tabs (or two browsers) to talk peer-to-peer over a
+    real worker relay. Each tab is one identity — this demo does not juggle
+    multiple identities in a single tab.</p>
+
+  <fieldset>
+    <legend>1. Identity</legend>
+    <div class="row"><button id="btnInit">init()</button> <span id="myId"></span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>2. Relay</legend>
+    <div class="row">
+      <input id="routerUrl" type="text" placeholder="https://router.example.com" />
+      <button id="btnConnect">connectWorker</button>
+      <span id="relayStatus"></span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>3. Handshake</legend>
+    <div class="row">
+      <input id="peerId" type="text" placeholder="peer id" />
+      <button id="btnOffer">createOffer + send</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>4. Listen</legend>
+    <div class="row">
+      <button id="btnListen">Start listening</button>
+      <span id="listenStatus">stopped</span>
+    </div>
+    <p style="margin:0.25rem 0 0;color:#666;font-size:0.9em">
+      Polls <code>NexTalk.relay.listen()</code> — same auto-dispatch as
+      <code>nextalk worker listen</code>: incoming offers are accepted and
+      answered automatically, answers finish the handshake automatically,
+      messages are decrypted automatically. You only see the resulting
+      events below, not raw envelopes.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>5. Chat</legend>
+    <div class="row">
+      <input id="chatPeer" type="text" placeholder="established peer id" />
+      <input id="chatText" type="text" placeholder="message" />
+      <button id="btnSend">encrypt + send</button>
+    </div>
+  </fieldset>
+
+  <div id="log"></div>
+
+  ```html
+<script src="wasm/wasm_exec.js"></script>
+
+<script>
+  const logEl = document.getElementById("log");
+
+  function log(...args) {
+    logEl.textContent +=
+      args
+        .map((a) =>
+          typeof a === "string" ? a : JSON.stringify(a)
+        )
+        .join(" ") + "\n";
+
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  /*
+   * Global error wrapper.
+   *
+   * This must live outside setupUI(), because handlers such as
+   * btnListen may also need to use it.
+   */
+  function safe(fn) {
+    return (...args) => {
+      try {
+        return fn(...args);
+      } catch (e) {
+        const message =
+          e && e.message ? e.message : String(e);
+
+        log("[uncaught]", message);
+        console.error(e);
+      }
+    };
+  }
+
+  /*
+   * Safely call a NexTalk WASM function.
+   *
+   * Every exported WASM function is expected to return an object.
+   * If the function is missing, returns null/undefined, or throws,
+   * convert that situation into a normal { error } result.
+   */
+  function call(fn, ...args) {
+    if (typeof NexTalk === "undefined") {
+      return {
+        error: "NexTalk module not loaded yet"
+      };
+    }
+
+    if (typeof fn !== "function") {
+      return {
+        error: "NexTalk function is not available"
+      };
+    }
+
+    try {
+      const res = fn(...args);
+
+      if (res === undefined || res === null) {
+        return {
+          error:
+            "call returned no result (wasm module may have crashed — try reloading the page)"
+        };
+      }
+
+      return res;
+    } catch (e) {
+      const message =
+        e && e.message ? e.message : String(e);
+
+      console.error("[NexTalk call]", e);
+
+      return {
+        error: message
+      };
+    }
+  }
+
+  /*
+   * Listening state.
+   *
+   * These are global to this script because pollListen()
+   * and setupUI() both use them.
+   */
+  let listenTimer = null;
+  let isListening = false;
+
+  /*
+   * Poll the NexTalk relay for incoming events.
+   *
+   * The actual offer/answer/message processing happens
+   * inside the Go WASM module.
+   */
+  async function pollListen() {
+    try {
+      if (
+        typeof NexTalk === "undefined" ||
+        !NexTalk.relay ||
+        typeof NexTalk.relay.listen !== "function"
+      ) {
+        log("[listen]", "NexTalk relay.listen is not available");
+
+        if (isListening) {
+          listenTimer = setTimeout(pollListen, 2000);
+        }
+
+        return;
+      }
+
+      const result = await NexTalk.relay.listen();
+
+      if (!result) {
+        log("[relay.listen]", "no result");
+      } else if (result.error) {
+        log("[relay.listen]", result.error);
+      } else {
+        for (const e of result.events || []) {
+          switch (e.type) {
+            case "offer":
+              log(
+                "[offer] accepted from",
+                e.peer,
+                "- answer sent"
+              );
+              break;
+
+            case "answer":
+              log(
+                "[answer] session established with",
+                e.peer
+              );
+
+              if (e.peer) {
+                document.getElementById("chatPeer").value = e.peer;
+              }
+
+              break;
+
+            case "message":
+              log(
+                "[chat]",
+                e.sender,
+                ":",
+                e.message
+              );
+              break;
+
+            case "error":
+              log(
+                "[listen event error]",
+                e.message
+              );
+              break;
+
+            default:
+              log("[listen event]", e);
+              break;
+          }
+        }
+      }
+    } catch (e) {
+      log(
+        "[listen failed]",
+        e && e.message ? e.message : String(e)
+      );
+
+      console.error(e);
+    }
+
+    /*
+     * Continue polling only when listening is enabled.
+     */
+    if (isListening) {
+      listenTimer = setTimeout(pollListen, 2000);
+    }
+  }
+
+  /*
+   * Attach all UI handlers.
+   */
+  function setupUI() {
+    /*
+     * INIT
+     */
+    const btnInit = document.getElementById("btnInit");
+
+    if (btnInit) {
+      btnInit.onclick = safe(() => {
+        const result = call(NexTalk.init);
+
+        if (!result) {
+          return log(
+            "[init]",
+            "no result returned"
+          );
+        }
+
+        const {
+          id,
+          error
+        } = result;
+
+        if (error) {
+          return log("[init]", error);
+        }
+
+        if (!id) {
+          return log(
+            "[init]",
+            "initialization succeeded but no identity was returned"
+          );
+        }
+
+        const myId = document.getElementById("myId");
+
+        if (myId) {
+          myId.textContent = id;
+        }
+
+        log(
+          "[init] identity:",
+          id
+        );
+      });
+    }
+
+    /*
+     * CONNECT / REGISTER
+     */
+    const btnConnect =
+      document.getElementById("btnConnect");
+
+    if (btnConnect) {
+      btnConnect.onclick = safe(async () => {
+        const routerInput =
+          document.getElementById("routerUrl");
+
+        const routerUrl =
+          routerInput
+            ? routerInput.value.trim()
+            : "";
+
+        if (!routerUrl) {
+          return log(
+            "[relay]",
+            "enter a router URL first"
+          );
+        }
+
+        if (
+          typeof NexTalk === "undefined" ||
+          !NexTalk.relay
+        ) {
+          return log(
+            "[relay]",
+            "NexTalk relay module is not available"
+          );
+        }
+
+        if (
+          typeof NexTalk.relay.connectWorker !==
+          "function"
+        ) {
+          return log(
+            "[relay.connectWorker]",
+            "function is not available"
+          );
+        }
+
+        const res = call(
+          NexTalk.relay.connectWorker,
+          routerUrl
+        );
+
+        if (res && res.error) {
+          return log(
+            "[relay.connectWorker]",
+            res.error
+          );
+        }
+
+        let reg;
+
+        try {
+          if (
+            typeof NexTalk.relay.register !==
+            "function"
+          ) {
+            return log(
+              "[relay.register]",
+              "function is not available"
+            );
+          }
+
+          reg =
+            await NexTalk.relay.register();
+        } catch (e) {
+          return log(
+            "[relay.register]",
+            e && e.message
+              ? e.message
+              : String(e)
+          );
+        }
+
+        if (!reg) {
+          return log(
+            "[relay.register]",
+            "no result"
+          );
+        }
+
+        if (reg.error) {
+          return log(
+            "[relay.register]",
+            reg.error
+          );
+        }
+
+        const relayStatus =
+          document.getElementById(
+            "relayStatus"
+          );
+
+        if (relayStatus) {
+          relayStatus.textContent =
+            "connected";
+        }
+
+        log(
+          "[relay] connected + registered:",
+          reg
+        );
+
+        log(
+          "[relay] click 'Start listening' to begin polling for offers/answers/messages"
+        );
+      });
+    }
+
+    /*
+     * CREATE OFFER
+     */
+    const btnOffer =
+      document.getElementById("btnOffer");
+
+    if (btnOffer) {
+      btnOffer.onclick = safe(() => {
+        const peerInput =
+          document.getElementById("peerId");
+
+        const peer =
+          peerInput
+            ? peerInput.value.trim()
+            : "";
+
+        if (!peer) {
+          return log(
+            "[offer]",
+            "enter a peer id first"
+          );
+        }
+
+        const result = call(
+          NexTalk.createOffer,
+          peer
+        );
+
+        if (!result) {
+          return log(
+            "[createOffer]",
+            "no result"
+          );
+        }
+
+        const {
+          offer,
+          error
+        } = result;
+
+        if (error) {
+          return log(
+            "[createOffer]",
+            error
+          );
+        }
+
+        if (!offer) {
+          return log(
+            "[createOffer]",
+            "no offer returned"
+          );
+        }
+
+        if (
+          !NexTalk.relay ||
+          typeof NexTalk.relay.sendOffer !==
+            "function"
+        ) {
+          return log(
+            "[relay.sendOffer]",
+            "function is not available"
+          );
+        }
+
+        const sent = call(
+          NexTalk.relay.sendOffer,
+          peer,
+          offer
+        );
+
+        if (sent && sent.error) {
+          return log(
+            "[relay.sendOffer]",
+            sent.error
+          );
+        }
+
+        log(
+          "[offer] sent to",
+          peer
+        );
+      });
+    }
+
+    /*
+     * SEND MESSAGE
+     */
+    const btnSend =
+      document.getElementById("btnSend");
+
+    if (btnSend) {
+      btnSend.onclick = safe(() => {
+        const peerInput =
+          document.getElementById("chatPeer");
+
+        const textInput =
+          document.getElementById("chatText");
+
+        const peer =
+          peerInput
+            ? peerInput.value.trim()
+            : "";
+
+        const text =
+          textInput
+            ? textInput.value
+            : "";
+
+        if (!peer || !text) {
+          return log(
+            "[send]",
+            "need a peer and a message"
+          );
+        }
+
+        const result = call(
+          NexTalk.encrypt,
+          peer,
+          text
+        );
+
+        if (!result) {
+          return log(
+            "[encrypt]",
+            "no result"
+          );
+        }
+
+        const {
+          ciphertext,
+          error
+        } = result;
+
+        if (error) {
+          return log(
+            "[encrypt]",
+            error
+          );
+        }
+
+        if (!ciphertext) {
+          return log(
+            "[encrypt]",
+            "no ciphertext returned"
+          );
+        }
+
+        if (
+          !NexTalk.relay ||
+          typeof NexTalk.relay.sendMessage !==
+            "function"
+        ) {
+          return log(
+            "[relay.sendMessage]",
+            "function is not available"
+          );
+        }
+
+        const sent = call(
+          NexTalk.relay.sendMessage,
+          peer,
+          ciphertext
+        );
+
+        if (sent && sent.error) {
+          return log(
+            "[relay.sendMessage]",
+            sent.error
+          );
+        }
+
+        log(
+          "[send] ->",
+          peer,
+          ":",
+          text
+        );
+
+        if (textInput) {
+          textInput.value = "";
+        }
+      });
+    }
+
+    /*
+     * START / STOP LISTENING
+     */
+    const btnListen =
+      document.getElementById("btnListen");
+
+    if (btnListen) {
+      btnListen.onclick = safe(() => {
+        /*
+         * STOP
+         */
+        if (isListening) {
+          isListening = false;
+
+          if (listenTimer !== null) {
+            clearTimeout(listenTimer);
+            listenTimer = null;
+          }
+
+          const listenStatus =
+            document.getElementById(
+              "listenStatus"
+            );
+
+          if (listenStatus) {
+            listenStatus.textContent =
+              "stopped";
+          }
+
+          btnListen.textContent =
+            "Start listening";
+
+          log(
+            "[listen] stopped"
+          );
+
+          return;
+        }
+
+        /*
+         * START
+         */
+        if (
+          typeof NexTalk === "undefined" ||
+          !NexTalk.relay ||
+          typeof NexTalk.relay.listen !==
+            "function"
+        ) {
+          return log(
+            "[listen]",
+            "NexTalk.relay.listen is not available"
+          );
+        }
+
+        isListening = true;
+
+        const listenStatus =
+          document.getElementById(
+            "listenStatus"
+          );
+
+        if (listenStatus) {
+          listenStatus.textContent =
+            "listening...";
+        }
+
+        btnListen.textContent =
+          "Stop listening";
+
+        log(
+          "[listen] started"
+        );
+
+        pollListen();
+      });
+    }
+
+    /*
+     * UI initialization completed.
+     */
+    log("[ui] ready");
+  }
+
+  /*
+   * Global browser error handler.
+   *
+   * This catches errors that escape the local safe()
+   * wrappers.
+   */
+  window.addEventListener(
+    "error",
+    (e) => {
+      log(
+        "[window error]",
+        e && e.message
+          ? e.message
+          : String(e)
+      );
+
+      console.error(
+        "[window error]",
+        e
+      );
+    }
+  );
+
+  /*
+   * Catch rejected promises that nobody awaited.
+   */
+  window.addEventListener(
+    "unhandledrejection",
+    (e) => {
+      const reason =
+        e && e.reason
+          ? e.reason
+          : e;
+
+      log(
+        "[unhandled rejection]",
+        reason &&
+        reason.message
+          ? reason.message
+          : String(reason)
+      );
+
+      console.error(
+        "[unhandled rejection]",
+        reason
+      );
+    }
+  );
+
+  /*
+   * Start Go WASM.
+   */
+  const go = new Go();
+
+  log("[wasm] loading...");
+
+  WebAssembly.instantiateStreaming(
+    fetch("wasm/nextalk.wasm"),
+    go.importObject
+  )
+    .then((result) => {
+      /*
+       * Start the Go runtime.
+       *
+       * go.run() returns a Promise because the Go runtime
+       * continues executing after the WASM instance starts.
+       */
+      go.run(result.instance);
+
+      log("[wasm] loaded");
+
+      /*
+       * Give the Go runtime a chance to expose NexTalk
+       * before wiring the UI.
+       */
+      setTimeout(() => {
+        if (
+          typeof NexTalk === "undefined"
+        ) {
+          log(
+            "[wasm]",
+            "WASM loaded, but NexTalk global was not exposed"
+          );
+          return;
+        }
+
+        log(
+          "[wasm]",
+          "NexTalk API detected"
+        );
+
+        setupUI();
+      }, 0);
+    })
+    .catch((error) => {
+      log(
+        "[wasm load failed]",
+        error &&
+        error.message
+          ? error.message
+          : String(error)
+      );
+
+      console.error(
+        "[wasm load failed]",
+        error
+      );
+    });
+</script>
+```
+
+</body>
+
+</html>
