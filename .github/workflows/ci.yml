@@ -28,6 +28,15 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: gofmt check
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
 
