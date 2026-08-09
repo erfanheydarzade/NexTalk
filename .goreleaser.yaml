@@ -10,13 +10,10 @@
 #
 # Local test run (no publish): goreleaser release --snapshot --clean
 version: 2
-
 project_name: nextalk
-
 before:
   hooks:
     - go mod tidy
-
 builds:
   - id: nextalk
     main: ./cmd/nextalk
@@ -46,7 +43,6 @@ builds:
         goarch: arm
       - goos: windows
         goarch: arm64
-
 archives:
   - id: nextalk-archive
     ids: [nextalk]
@@ -61,9 +57,17 @@ archives:
       - LICENSE
       - docs/**
 
+  # Raw, unpacked binary for people who'd rather download-and-run than
+  # download-extract-move. Same naming scheme as the archive above; the
+  # native binary extension (.exe on Windows) is appended automatically.
+  # Uploaded as extra assets alongside the .tar.gz/.zip.
+  - id: nextalk-binary
+    ids: [nextalk]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    formats: [binary]
 checksum:
   name_template: "checksums.txt"
-
 changelog:
   # A concise, human-clean release body instead of the raw commit log:
   # grouped by type, with merge commits and CI noise filtered out.
@@ -87,12 +91,10 @@ changelog:
       order: 2
     - title: "Other"
       order: 999
-
 release:
   name_template: "NexTalk {{ .Version }}"
   header: |
     ## NexTalk {{ .Version }}
-
     Prebuilt binaries for Linux, macOS and Windows are below, plus a
     browser/WebAssembly build (`nextalk-wasm_{{ .Version }}.tar.gz`,
     uploaded separately by the release workflow). See
