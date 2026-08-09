@@ -347,3 +347,65 @@ silently absent from the menu.
 `GUITransport` struct for things that should survive across sub-shell entries
 (like the active identity or mailbox). Put those in `registry.State` instead;
 that value is shared across all transports in a single `nextalk shell` session.
+
+---
+
+## Wiring the same transport into the WASM build
+
+The `internal/registry` auto-discovery above is CLI/shell-only — see
+[`wasm.md`](wasm.md#why-the-relay-just-works-in-wasm) for why: a browser tab has no
+terminal REPL to offer a transport menu in, and no `init()`-blank-import
+step, since `cmd/nextalk-wasm/main.go` never imports `cmd/transports`.
+Making your transport available from JS is a separate, smaller step: add
+one file to `internal/wasmbridge/` and mount it in `register.go`, the
+same pattern `relay.go` (the worker transport) already follows.
+
+1. **Add `internal/wasmbridge/<name>.go`.** Model it on `relay.go`:
+   construct your transport's adapter, hold it on `internal/wasmbridge`'s
+   shared `state` (the wasm analogue of `client.Client`), and expose one
+   `js.Func` per operation. Reuse the *same* transport-side code the CLI
+   uses (e.g. `internal/relay/<name>`) rather than reimplementing
+   protocol logic in the bridge — that's the whole point of the split
+   `wasm.md` describes between `internal/relay/worker.Adapter` (shared)
+   and `internal/wasmbridge/relay.go` (browser-only plumbing around it).
+   If your transport's `Send`/`Receive` doesn't yet satisfy
+   `relay.Relay` polymorphically (see the proxy-transport gap noted in
+   `wasm.md`), fix that first — the bridge should call through the same
+   interface the worker transport does, not a one-off.
+
+2. **Mount your functions in `register.go`.** This file is "the one
+   place that ever mounts a new call onto the `NexTalk` global" — the
+   wasm build's equivalent of `cmd/root.go` mounting CLI command groups.
+   Add your namespace there, e.g.:
+
+   ```go
+   // internal/wasmbridge/register.go
+   func Register() {
+       // ... existing identity / handshake / message / relay / contacts ...
+       registerMyTransport() // defined in your new my_transport.go
+   }
+   ```
+
+3. **No shim, no `init()` magic.** Unlike the CLI registry, there's
+   nothing else to touch — no blank import, no `MenuOrder`. `main.go`
+   stays protocol-free either way.
+
+4. **Rebuild and re-check the JS surface.**
+
+   ```bash
+   ./cmd/nextalk-wasm/build.sh
+   python3 -m http.server 8000   # see wasm.md — file:// will not work
+   ```
+
+   Open `http://localhost:8000/web/`, and in the devtools console confirm
+   your new `NexTalk.<yourNamespace>.*` functions exist and return the
+   `{ ... } | { error: "..." }` shape every other bridge call uses.
+
+5. **Document the addition.** Add your new calls to the "JS API" table in
+   `wasm.md`, next to `NexTalk.relay.*`, so the two docs stay in sync the
+   same way `register.go` and `cmd/root.go` mirror each other for the CLI.
+
+If your transport has no meaningful browser story (e.g. it depends on a
+local filesystem layout offline mode doesn't need), it's fine to leave it
+CLI/shell-only and skip this section entirely — nothing about the
+`internal/registry` steps above requires a wasm counterpart.
