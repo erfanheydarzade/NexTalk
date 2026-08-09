@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mr-tron/base58"
 )
 
 // Message Relay is the single interface every transport backend must satisfy.
@@ -138,6 +140,61 @@ type RoutingTable struct {
 // Expired reports whether a cached RoutingTable should be refetched.
 func (rt *RoutingTable) Expired() bool {
 	return rt == nil || time.Now().UnixMilli() > rt.ExpiresAt
+}
+
+// ---- Envelope wire helpers ----------------------------------------------
+//
+// These are the ONE place the "[1 type byte][data...]" framing used on top
+// of every relay.Relay.Send/Receive call is implemented. Originally this
+// lived unexported inside cmd/worker/envolpe.go; it is promoted here so
+// every caller of a Relay — the CLI worker transport, the wasm bridge, or
+// anything else built later — frames messages identically instead of each
+// reimplementing (and potentially drifting from) the same two lines.
+
+// PeerIDByteLen is the decoded length of a NexTalk peer ID: Ed25519 public
+// key (32 bytes) + SHA3-256(Dilithium public key) (32 bytes). See
+// crypto.DerivePeerID for the encoding this mirrors.
+const PeerIDByteLen = 64
+
+// WrapEnvelope prefixes data with a single envelope-type byte. This is the
+// wire format every Relay.Send call in NexTalk uses to tell the receiving
+// side whether the payload is an offer, an answer, or an encrypted message
+// — see UnwrapEnvelope (internal/relay/worker/adapter.go) for the inverse.
+func WrapEnvelope(t Type, data []byte) []byte {
+	out := make([]byte, 1+len(data))
+	out[0] = byte(t)
+	copy(out[1:], data)
+	return out
+}
+
+// PeerIDToEd25519Pub extracts the Ed25519 identity public key (the first 32
+// bytes) from a base58-encoded NexTalk peer ID, for use as the
+// recipientPubKey argument to Relay.Send.
+func PeerIDToEd25519Pub(peerID string) ([]byte, error) {
+	raw, err := base58.Decode(peerID)
+	if err != nil {
+		return nil, fmt.Errorf("relay: base58 decode peer id: %w", err)
+	}
+	if len(raw) != PeerIDByteLen {
+		return nil, fmt.Errorf("relay: invalid peer ID: decoded length %d, want %d", len(raw), PeerIDByteLen)
+	}
+	return raw[:32], nil
+}
+
+// SendEnvelope wraps data in a type-tagged envelope (see WrapEnvelope) and
+// delivers it to recipientPubKey over r. Sender-auth signing happens inside
+// r.Send itself — this only frames the payload. Every transport (CLI
+// worker, wasm bridge, ...) should call this instead of hand-rolling the
+// envelope byte, so they can never drift out of sync with UnwrapEnvelope.
+func SendEnvelope(
+	ctx context.Context,
+	r Relay,
+	senderPriv ed25519.PrivateKey,
+	recipientPubKey []byte,
+	t Type,
+	data []byte,
+) error {
+	return r.Send(ctx, recipientPubKey, WrapEnvelope(t, data), senderPriv)
 }
 
 // Relay is the single interface every transport backend must satisfy. It
