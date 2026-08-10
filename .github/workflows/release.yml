@@ -132,11 +132,29 @@ jobs:
           EOF
           tar -C dist-wasm -czf "nextalk-wasm_${RELEASE_TAG}.tar.gz" .
 
+      # --- Loose WASM assets: for people who just want to grab the two
+      # files and drop them in their own web app, with no tar/extract step
+      # and no automation. Named with the version + a real extension so
+      # they're unambiguous sitting next to the CLI archives on the
+      # release page. Content is byte-identical to what's inside the
+      # tarball above; this is purely an additional, unpacked copy.
+      - name: Stage loose WASM assets
+        run: |
+          set -euo pipefail
+          cp dist-wasm/web/wasm/nextalk.wasm "nextalk_${RELEASE_TAG}.wasm"
+          cp dist-wasm/web/wasm/wasm_exec.js "wasm_exec_${RELEASE_TAG}.js"
+          printf '{\n  "version": "%s",\n  "api": "2",\n  "files": {\n    "wasm": "nextalk_%s.wasm",\n    "glue": "wasm_exec_%s.js"\n  }\n}\n' \
+            "${RELEASE_TAG}" "${RELEASE_TAG}" "${RELEASE_TAG}" > "nextalk-wasm_${RELEASE_TAG}.version.json"
+
       - name: Upload WASM bundle to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${RELEASE_TAG}" "nextalk-wasm_${RELEASE_TAG}.tar.gz" \
+          gh release upload "${RELEASE_TAG}" \
+            "nextalk-wasm_${RELEASE_TAG}.tar.gz" \
+            "nextalk_${RELEASE_TAG}.wasm" \
+            "wasm_exec_${RELEASE_TAG}.js" \
+            "nextalk-wasm_${RELEASE_TAG}.version.json" \
             --repo "${{ github.repository }}" --clobber
 
       - name: Mark pre-release if requested

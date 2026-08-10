@@ -96,8 +96,11 @@ release:
   header: |
     ## NexTalk {{ .Version }}
     Prebuilt binaries for Linux, macOS and Windows are below, plus a
-    browser/WebAssembly build (`nextalk-wasm_{{ .Version }}.tar.gz`,
-    uploaded separately by the release workflow). See
+    browser/WebAssembly build, uploaded separately by the release workflow:
+    the full bundle (`nextalk-wasm_{{ .Version }}.tar.gz`) and, if you just
+    want the two files with no extracting, the loose
+    `nextalk_{{ .Version }}.wasm` + `wasm_exec_{{ .Version }}.js` (plus a
+    `nextalk-wasm_{{ .Version }}.version.json` manifest). See
     [`docs/wasm.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/wasm.md)
     for how to run the WASM build, and
     [`docs/adding-a-transport.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/adding-a-transport.md)
