@@ -56,11 +56,16 @@ archives:
       - README.md
       - LICENSE
       - docs/**
+      - .env.example
 
   # Raw, unpacked binary for people who'd rather download-and-run than
   # download-extract-move. Same naming scheme as the archive above; the
   # native binary extension (.exe on Windows) is appended automatically.
   # Uploaded as extra assets alongside the .tar.gz/.zip.
+  # Note: GoReleaser's `binary` format ships the single executable only —
+  # it has no `files:` option — so .env.example can't ride along here.
+  # It's bundled in the .tar.gz/.zip archive above instead; anyone who
+  # grabs the raw binary can still get it from the repo or that archive.
   - id: nextalk-binary
     ids: [nextalk]
     name_template: >-
