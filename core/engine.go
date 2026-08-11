@@ -239,6 +239,16 @@ func (e *Engine) FinishHandshake(
 		return "", fmt.Errorf("answer missing PQC ciphertext")
 	}
 
+	// Identity binding: the claimed SenderId must be derivable from the
+	// supplied public keys. SenderId is not part of the signed handshake
+	// message, so without this check a malicious/compromised responder
+	// (or a hostile transport) could sign with its own real keys while
+	// claiming to be an arbitrary peer ID, causing the caller to file this
+	// session under the wrong peer and silently hijack that relationship.
+	if crypto.DerivePeerID(answer.IdPub, answer.DilithiumPub) != answer.SenderId {
+		return "", fmt.Errorf("sender ID spoofing detected in answer: keys do not match claimed ID")
+	}
+
 	// KEM: recover the shared secret the responder encapsulated for us.
 	scheme := kyber768.Scheme()
 	kyberPriv, err := scheme.UnmarshalBinaryPrivateKey(pendingPeer.PqcPrivateKey)
