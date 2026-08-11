@@ -23,6 +23,7 @@ NexTalk establishes a secure, forward-secret session between two peers using a h
 cmd/
   contacts/        → Global contacts management (add, remove, rename, note, info, list)
   nextalk/          → Binary entry point (main.go)
+  nextalk-wasm/     → WebAssembly build target (main.go + build.sh/build.bat)
   offline/          → Cobra subcommands: init, offer, accept, finish, encrypt, decrypt, run
   worker/           → Worker transport subcommand + registration
   proxy/            → Proxy transport subcommand + registration
@@ -44,6 +45,9 @@ internal/
     worker/         → Cloudflare Worker adapter
     proxy/          → S3/proxy adapter
   session/          → Session state helpers
+  wasmbridge/       → JS <-> Go bridge powering the browser build (one file per concern)
+
+web/                → Browser demo (index.html) that loads the wasm bundle
 ```
 
 Each layer has a well-defined trust boundary:
@@ -56,7 +60,9 @@ Each layer has a well-defined trust boundary:
 | `transport` | **Untrusted** — treats all relay infrastructure as hostile |
 | `cmd`       | Orchestration only — no cryptographic decisions          |
 
-The transport layer never sees plaintext. It only routes opaque JSON envelopes.
+The transport layer never sees plaintext. It only routes opaque, already-encrypted
+bytes — how those bytes are framed (JSON vs. a raw type-byte prefix) differs
+per transport; see [Wire Formats](#wire-formats) below.
 
 ---
 
@@ -122,18 +128,45 @@ Each message is encrypted with **XChaCha20-Poly1305**:
 
 ## Wire Formats
 
-Handshake traffic and transport envelopes are JSON; encrypted message frames are
-binary [nanopack](https://github.com/erfanheydarzade/nanopack) payloads.
+Handshake payloads (offer/answer) are JSON `core.HandShakeOffer`/`HandShakeAnswer`
+structs; encrypted message frames are always binary
+[nanopack](https://github.com/erfanheydarzade/nanopack) `crypto.SecureMessage`
+payloads. How those payloads get framed for transport differs per backend —
+see below.
 
-### Transport envelope (JSON)
+### Transport envelopes
 
-All transports (offline CLI, worker, proxy) exchange structured JSON envelopes:
+There is no single wire envelope shared by every transport — each one frames
+the same three payload kinds (offer / answer / message) differently. `finish`
+is never one of them: it's a local action name for processing a received
+*answer*, not something that travels on the wire.
 
-```json
-{ "type": "offer | answer | message | finish", "data": { ... } }
-```
+- **Offline mode** (copy/paste) — JSON, but the `Envelope{Type, Data}` struct
+  carries no `json:` tags, so the real keys are capitalized and `Data` is a
+  base64 **string**, not a nested object:
+  ```json
+  { "Type": "offer", "Data": "base64..." }
+  ```
+  (`cmd/offline/models.go`)
 
-The `data` field always contains the decoded payload as a JSON object — never a string. The transport layer does not interpret payload semantics.
+- **Worker transport** (Cloudflare relay) — not JSON at all: a single raw
+  type byte prefixed onto the payload, `0x01`/`0x02`/`0x03` for
+  offer/answer/message:
+  ```
+  [type byte][raw payload bytes]
+  ```
+  built by `relay.WrapEnvelope` / read back by `relay.worker.UnwrapEnvelope`,
+  and shared by the CLI's `worker` transport and the wasm bridge.
+
+- **Proxy transport** — JSON with a numeric `type` (1/2/3) and `data` as a
+  real embedded JSON object:
+  ```json
+  { "type": 1, "data": { ... } }
+  ```
+  (`internal/relay/proxy/adapter.go`)
+
+In every case the transport layer only routes opaque bytes — it never
+inspects the decoded offer/answer/message payload itself.
 
 ### Message frame (nanopack)
 
@@ -173,14 +206,14 @@ go build ./cmd/nextalk
 go build -o nextalk.exe ./cmd/nextalk
 ```
 
-Requires Go 1.21+. Dependencies are managed via `go.mod`.
+Requires Go 1.25+ (see `go.mod`). Dependencies are managed via `go.mod`.
 
 ### Prebuilt binaries
 
-Prebuilt `nextalk` archives (Linux/macOS/Windows, amd64/arm64/armv7) and a
-ready-to-serve WebAssembly bundle are published on the
-[Releases page](https://github.com/erfanheydarzade/NexTalk/releases) for
-every tagged version — see [`docs/RELEASING.md`](docs/RELEASING.md) for
+Prebuilt `nextalk` archives — Linux (amd64/arm64/armv7), macOS (amd64/arm64),
+Windows (amd64 only) — and a ready-to-serve WebAssembly bundle are published
+on the [Releases page](https://github.com/erfanheydarzade/NexTalk/releases)
+for every tagged version — see [`docs/RELEASING.md`](docs/RELEASING.md) for
 how those get built. For the browser build specifically, see
 [`docs/wasm.md`](docs/wasm.md), including why it must be served over
 HTTP (`python3 -m http.server`) rather than opened as a `file://` URL.
@@ -206,9 +239,19 @@ All `--in` / `--out` flags accept `raw` (default), `b64`, or `hex`. The exceptio
 
 Generates a fresh Ed25519 + Dilithium3 identity and persists it to `<peer_id>.json` in the working directory.
 
-**Output:**
+**Output (human, default)** — printed to stdout:
+```
+[✓] Identity created
+
+ID:
+3tJcNVmRHZ7CFhF1WPUDyECp...
+```
+
+**Output (`--format json`)** — the response structs across every offline
+subcommand carry no `json:` struct tags, so keys are the bare capitalized Go
+field names, not lower-camelCase:
 ```json
-{ "id": "3tJcNVmRHZ7CFhF1WPUDyECp..." }
+{"ID":"3tJcNVmRHZ7CFhF1WPUDyECp..."}
 ```
 
 ---
@@ -231,24 +274,24 @@ Generates a fresh Ed25519 + Dilithium3 identity and persists it to `<peer_id>.js
 
 Loads `<local_peer_id>.json`, generates ephemeral keys + Kyber768 keypair, signs the bundle with Ed25519 + Dilithium3, and outputs an offer envelope.
 
-**Output:**
+**Output (no `-o`, default `--out raw`)** — the envelope itself written straight
+to stdout: `json.Marshal(Envelope{Type: "offer", Data: offerBytes})`, where
+`Envelope` has no `json:` tags (capitalized keys) and `Data` is the raw offer
+bytes, base64-encoded by `encoding/json`'s `[]byte` handling:
 ```json
-{
-  "type": "offer",
-  "data": {
-    "s": "<sender_id>",
-    "r": "<recipient_id_bytes>",
-    "oid": "<offer_id>",
-    "ip": "<ed25519_pub>",
-    "p":  "<x25519_pub>",
-    "dp": "<dh_pub>",
-    "kp": "<kyber768_pub>",
-    "lp": "<dilithium_pub>",
-    "sg": "<ed25519_sig>",
-    "ds": "<dilithium_sig>"
-  }
-}
+{"Type":"offer","Data":"<base64 of the core.HandShakeOffer JSON>"}
 ```
+
+**Output (`--format json`)** — wraps that same encoded envelope string in an
+`OfferResponse`, again untagged:
+```json
+{"RemotePeer":"<remote_peer_id>","Envelope":"<encoded envelope string>","Encoding":"raw"}
+```
+
+`core.HandShakeOffer` (the struct actually inside `Data`) uses full
+lower-camelCase field names, not abbreviations:
+`senderId`, `recipientId`, `offerID`, `idPub`, `pub`, `dhPub`, `kyberPub`,
+`dilithiumPub`, `sign`, `dilithiumSign` (see `core/models.go`).
 
 ---
 
@@ -272,25 +315,20 @@ cat offer.bin | ./nextalk offline accept -i <local_peer_id> -o answer.bin     # 
 
 Offer can also be piped via stdin (omit `-e` and `-f`). Verifies both signatures (Ed25519 + Dilithium3), checks Offer ID for replay, **encapsulates** the initiator's Kyber768 public key to produce `(kyber_ciphertext, shared_secret)`, runs the full handshake, and outputs an answer envelope.
 
-**Output:**
+**Output (no `-o`, default `--out raw`)** — same untagged `Envelope` shape as
+`offer`, type `"answer"`:
 ```json
-{
-  "type": "answer",
-  "data": {
-    "s":  "<responder_id>",
-    "ip": "<ed25519_pub>",
-    "p":  "<x25519_pub>",
-    "dp": "<dh_pub>",
-    "kp": "<kyber768_pub>",
-    "kc": "<kyber_ciphertext>",
-    "lp": "<dilithium_pub>",
-    "sg": "<ed25519_sig>",
-    "ds": "<dilithium_sig>",
-    "oid": "<offer_id>",
-    "r":  "<recipient_id>"
-  }
-}
+{"Type":"answer","Data":"<base64 of the core.HandShakeAnswer JSON>"}
 ```
+
+**Output (`--format json`)** wraps it in an `AcceptResponse{Envelope, Encoding}`:
+```json
+{"Envelope":"<encoded envelope string>","Encoding":"raw"}
+```
+
+`core.HandShakeAnswer` mirrors `HandShakeOffer` plus `kyberCiphertext`:
+`senderId`, `recipientId`, `offerID`, `idPub`, `pub`, `dhPub`, `kyberPub`,
+`kyberCiphertext`, `dilithiumPub`, `sign`, `dilithiumSign`.
 
 ---
 
@@ -311,10 +349,22 @@ Offer can also be piped via stdin (omit `-e` and `-f`). Verifies both signatures
 
 **Decapsulates** the Kyber ciphertext using the initiator's stored private key to recover `shared_secret`, then runs the same handshake derivation. If both peers derived the same shared secret, their session keys will match and the ratchet is active.
 
-**Output:**
-```json
-{ "type": "finish", "data": { "peer_id": "<remote_peer_id>" } }
+**Output (human, default)** — printed to **stderr** (stdout stays clean for
+piping):
 ```
+[✓] Session established
+
+Peer:
+<remote_peer_id>
+```
+
+**Output (`--format json`)** — `FinishResponse{PeerID string}`, untagged:
+```json
+{"PeerID":"<remote_peer_id>"}
+```
+
+There is no `finish` wire type — nothing is sent anywhere by this command; it
+only updates local session state from the answer already received.
 
 ---
 
@@ -337,21 +387,17 @@ echo "hello" | ./nextalk offline encrypt -i <local_peer_id> -r <remote_peer_id> 
 | `--out` | | stdout encoding: `raw`, `b64`, `hex` (default: raw) |
 | `--format` | | `human` or `json` |
 
-If neither `--message` nor `--file` is given, plaintext is read from stdin. Binary output to a TTY requires `--out b64`/`--out hex` or `-o file`. Loads the active session for the remote peer, advances the send ratchet, and outputs the encrypted envelope.
+If neither `--message` nor `--file` is given, plaintext is read from stdin. Binary output to a TTY requires `--out b64`/`--out hex` or `-o file`. Loads the active session for the remote peer, advances the send ratchet, and outputs the raw `crypto.SecureMessage` nanopack frame — **not** a JSON envelope like `offer`/`accept`.
 
-**Output:**
+**Output (no `-o`, `--format json`)** — reuses the same `DecryptResponse`
+struct as the `decrypt` command (see `cmd/offline/encrypt.go`), untagged:
 ```json
-{
-  "type": "message",
-  "data": {
-    "s": "<sender_id>",
-    "k": "<dh_ratchet_pub>",
-    "n": 0,
-    "c": "<ciphertext_bytes>",
-    "t": "<hmac_tag>"
-  }
-}
+{"Sender":"<remote_peer_id>","Encoding":"b64","Message":"<base64 SecureMessage frame>"}
 ```
+
+**Output (no `-o`, human, `--out b64`/`--out hex`)** — the encoded frame
+printed directly to stdout with no JSON wrapper at all; `--out raw` to a TTY
+is refused with an error telling you to use `-o` or `--out b64`/`hex` instead.
 
 ---
 
@@ -375,15 +421,24 @@ If neither `--message` nor `--file` is given, plaintext is read from stdin. Bina
 
 Note: `--in` defaults to `b64` here (unlike all other commands) since ciphertext almost always arrives base64-encoded in transit. Binary output to a TTY requires `--out b64`/`--out hex` or `-o file`. Verifies HMAC, resolves the sender session, handles any DH ratchet advancement, and decrypts.
 
-**Output:**
+**Output (human, default)** — status to **stderr**, plaintext alone to
+**stdout** (only when it decodes as text; binary content without `-o` is
+refused to protect the terminal):
+```
+[✓] Message decrypted
+
+From:
+<sender_peer_id>
+
+```
+```
+hello world
+```
+
+**Output (`--format json`)** — `DecryptResponse{Sender, Encoding, Message}`,
+untagged; `Encoding` is `"utf-8"` for text or `"base64"` for binary payloads:
 ```json
-{
-  "type": "message",
-  "data": {
-    "sender":  "<sender_peer_id>",
-    "message": "hello"
-  }
-}
+{"Sender":"<sender_peer_id>","Encoding":"utf-8","Message":"hello world"}
 ```
 
 ---
@@ -421,7 +476,12 @@ CIPHER=$(./nextalk offline encrypt -i "$ALICE" -r "$BOB" -m "hello world" --out 
 
 # Step 5: Bob decrypts it
 ./nextalk offline decrypt -i "$BOB" -c "$CIPHER" --in b64
-# → {"type":"message","data":{"sender":"<alice_id>","message":"hello world"}}
+# stderr: [✓] Message decrypted / From: <alice_id>
+# stdout: hello world
+
+# Same thing, machine-readable:
+./nextalk offline decrypt -i "$BOB" -c "$CIPHER" --in b64 --format json
+# → {"Sender":"<alice_id>","Encoding":"utf-8","Message":"hello world"}
 ```
 
 ### File-based (air-gap / manual exchange)
@@ -540,7 +600,10 @@ nextalk worker listen -i <YOUR_ID>
 nextalk worker listen -i <YOUR_ID> --format json
 ```
 
-Event types returned: `offer`, `answer`, `message`, `error`.
+Top-level event `type` values: `offer`, `answer`, `message`, `error`. `offer`
+and `answer` events also carry an `actions` array recording what `listen` did
+automatically in response — `answer_sent` after auto-accepting an offer,
+`session_established` after auto-finishing on a received answer.
 
 ### `worker encrypt`
 
@@ -594,9 +657,13 @@ Launches the full shell transport selector:
 
   1. Offline Mode  (Manual Cryptography Lab)
   2. Worker Mode   (Cloud Relay)
-  3. Proxy Mode    (Anonymized Routing)
+  3. 3. Proxy Mode    (Anonymized Routing)
   4. Exit
 ```
+
+(The doubled `3.` on the Proxy line isn't a typo here — `ProxyGUITransport.MenuLabel()`
+bakes its own `"3. "` prefix into the string in `cmd/proxy/register.go`, on top of
+the index the shell's menu loop already prints.)
 
 After selecting a transport, you enter a persistent shell:
 
@@ -671,9 +738,28 @@ current directory. Run `peers` to see everything currently completable.
 ## CLI Usage — Direct Transport Entry
 
 ```bash
-./nextalk worker   # Start directly in Worker transport shell
-./nextalk proxy    # Start directly in Proxy transport shell
+./nextalk worker     # Start directly in Worker transport shell
+./nextalk proxy run  # Start directly in Proxy transport shell — note the required `run` subcommand
 ```
+
+Unlike `worker` (whose root `worker` command runs the shell directly, `cmd/worker/command.go`),
+`proxy`'s root command has no `Run`/`RunE` of its own — only its `run`
+subcommand does (`cmd/proxy/command.go`). Bare `./nextalk proxy` just prints
+usage/help.
+
+---
+
+## Browser / WebAssembly
+
+`cmd/nextalk-wasm` compiles the same `core.Engine` + `crypto.SecurePeer` used by the CLI into a `NexTalk` JavaScript global, including the live worker relay (no reimplementation — `internal/relay/worker.Adapter` runs unmodified under `GOOS=js GOARCH=wasm` since `net/http` transparently uses `fetch()` there as of Go 1.21).
+
+```bash
+./cmd/nextalk-wasm/build.sh            # -> web/wasm/{nextalk.wasm,wasm_exec.js}
+python3 -m http.server 8000            # must be served over HTTP — file:// will not work
+# open http://localhost:8000/web/
+```
+
+The JS surface mirrors the CLI one-to-one: `NexTalk.init/id/exportIdentity/importIdentity`, `NexTalk.createOffer/acceptOffer/finishHandshake`, `NexTalk.encrypt/decrypt`, `NexTalk.relay.*` (connectWorker/register/sendOffer/sendAnswer/sendMessage/receive), `NexTalk.contacts.*`, `NexTalk.sessions.*`, and proquint helpers under `NexTalk.encoding.*`. `web/index.html` is a two-tab live-relay demo built on exactly this API. The proxy transport is **not** wired up in wasm (or in the CLI's polymorphic relay path) — `internal/relay/proxy.Adapter.Send` doesn't yet satisfy the `relay.Relay` interface. Full API reference, layout rationale, and worked examples: [`docs/wasm.md`](docs/wasm.md).
 
 ---
 
@@ -722,24 +808,32 @@ The test runner extracts results from the JSON stdout of each command and assert
 | Identity binding       | Transcript hash ties all pubkeys to handshake context |
 | Integrity              | HMAC-SHA3-256 + XChaCha20-Poly1305 AEAD         |
 | Peer authentication    | Dual signatures: Ed25519 (classical) + Dilithium3 (PQC) |
-| Transport confidentiality | Transport layer sees only opaque JSON envelopes |
+| Transport confidentiality | Transport layer only ever handles opaque, already-encrypted bytes |
 
 ---
 
 ## Configuration
 
-Worker and Proxy transports are configured via a `.env` file in the working directory:
+Worker and Proxy transports are configured via a `.env` file in the working directory (`internal/config`):
 
 ```env
 WORKER_URL=https://your-cloudflare-worker.workers.dev
 PROXY_URL=https://your-s3-relay-endpoint
+DEBUG=true
 ```
+
+| Variable | Default if unset |
+|----------|-------------------|
+| `WORKER_URL` | `""` (empty — worker calls will fail until set) |
+| `PROXY_URL` | `http://localhost:8080` |
+| `DEBUG` | `false` |
 
 ---
 
 ## Limitations & Future Work
 
 - **Not production-audited** — research and experimentation only
+- `internal/relay/proxy.Adapter.Send` doesn't satisfy the `relay.Relay` interface yet, so the proxy transport can't be used polymorphically the way the worker transport now can (CLI and wasm alike)
 - No multi-device identity synchronization
 - No persistent mailbox indexing per peer (in-memory only during shell session)
 - Transport-layer replay hardening is incomplete
