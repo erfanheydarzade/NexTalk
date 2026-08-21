@@ -84,6 +84,7 @@ func (c *shellCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	slotCandidates := map[registry.ArgKind][]string{
 		registry.ArgPeer:     c.state.PeerCandidates(),
 		registry.ArgIdentity: c.state.IdentityCandidates(),
+		registry.ArgContext:  c.state.ContextCandidates(),
 	}
 	candidates, ok := slotCandidates[spec.ArgKindAt(argIndex)]
 	if !ok { // registry.ArgText — free-form, no completion.
