@@ -17,12 +17,12 @@ import (
 
 // Fanout handles the creation and delivery of multi-user messages.
 type Fanout struct {
-	client          *client.Client
-	relay           relay.Relay
-	CtxStore        ContextStore
-	deliveryStore   DeliveryStore
-	config          FanoutConfig
-	mu              sync.Mutex
+	client        *client.Client
+	relay         relay.Relay
+	CtxStore      ContextStore
+	deliveryStore DeliveryStore
+	config        FanoutConfig
+	mu            sync.Mutex
 	// seenDeliveries tracks delivery IDs that have been processed to prevent replay.
 	// This is an in-memory cache; persistent replay protection is handled by
 	// the underlying crypto session's nonce tracking.
@@ -41,12 +41,12 @@ func NewFanout(
 		config = DefaultFanoutConfig()
 	}
 	return &Fanout{
-		client:          cl,
-		relay:           r,
-		CtxStore:        ctxStore,
-		deliveryStore:   deliveryStore,
-		config:          config,
-		seenDeliveries:  make(map[DeliveryID]bool),
+		client:         cl,
+		relay:          r,
+		CtxStore:       ctxStore,
+		deliveryStore:  deliveryStore,
+		config:         config,
+		seenDeliveries: make(map[DeliveryID]bool),
 	}
 }
 

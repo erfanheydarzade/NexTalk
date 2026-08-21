@@ -225,10 +225,10 @@ type Relay interface {
 type Type byte
 
 const (
-	TypeOffer      Type = 0x01
-	TypeAnswer     Type = 0x02
-	TypeMessage    Type = 0x03
-	TypeMultiMsg   Type = 0x04
+	TypeOffer    Type = 0x01
+	TypeAnswer   Type = 0x02
+	TypeMessage  Type = 0x03
+	TypeMultiMsg Type = 0x04
 )
 
 // Envelope is the common wire wrapper used by all relay implementations.

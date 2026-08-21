@@ -108,18 +108,18 @@ func (s *MemoryContextStore) DeletePolicy(contextID ContextID, recipient string)
 
 // MemoryDeliveryStore is an in-memory implementation of DeliveryStore for testing.
 type MemoryDeliveryStore struct {
-	mu         sync.RWMutex
-	deliveries map[DeliveryID]*MessageDelivery
-	byMessage  map[MessageID][]DeliveryID
+	mu          sync.RWMutex
+	deliveries  map[DeliveryID]*MessageDelivery
+	byMessage   map[MessageID][]DeliveryID
 	byRecipient map[string][]DeliveryID
 }
 
 // NewMemoryDeliveryStore creates a new in-memory delivery store.
 func NewMemoryDeliveryStore() *MemoryDeliveryStore {
 	return &MemoryDeliveryStore{
-		deliveries:   make(map[DeliveryID]*MessageDelivery),
-		byMessage:    make(map[MessageID][]DeliveryID),
-		byRecipient:  make(map[string][]DeliveryID),
+		deliveries:  make(map[DeliveryID]*MessageDelivery),
+		byMessage:   make(map[MessageID][]DeliveryID),
+		byRecipient: make(map[string][]DeliveryID),
 	}
 }
 
@@ -203,10 +203,10 @@ func (s *MemoryDeliveryStore) MarkDelivered(id DeliveryID) error {
 
 // Common errors
 var (
-	ErrContextNotFound   = &multimsgError{"context not found"}
-	ErrPolicyNotFound    = &multimsgError{"policy not found"}
-	ErrDeliveryNotFound  = &multimsgError{"delivery not found"}
-	ErrDeliveryPending   = &multimsgError{"delivery pending (no ciphertext yet)"}
+	ErrContextNotFound  = &multimsgError{"context not found"}
+	ErrPolicyNotFound   = &multimsgError{"policy not found"}
+	ErrDeliveryNotFound = &multimsgError{"delivery not found"}
+	ErrDeliveryPending  = &multimsgError{"delivery pending (no ciphertext yet)"}
 )
 
 type multimsgError struct {
@@ -471,11 +471,11 @@ func (s *JSONContextStore) DeletePolicy(contextID ContextID, recipient string) e
 // SECURITY NOTE: This is NOT production-grade crash-safe storage. See
 // JSONContextStore for the same limitations.
 type JSONDeliveryStore struct {
-	mu            sync.RWMutex
+	mu             sync.RWMutex
 	deliveriesFile string
-	deliveries    map[DeliveryID]*MessageDelivery
-	byMessage     map[MessageID][]DeliveryID
-	byRecipient   map[string][]DeliveryID
+	deliveries     map[DeliveryID]*MessageDelivery
+	byMessage      map[MessageID][]DeliveryID
+	byRecipient    map[string][]DeliveryID
 }
 
 // NewJSONDeliveryStore creates a new JSON-backed delivery store.

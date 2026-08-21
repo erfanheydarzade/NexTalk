@@ -92,8 +92,8 @@ func (t *OfflineGUITransport) Commands() []registry.CommandSpec {
 			Help:     "Send a multi-recipient message to context members",
 		},
 		{
-			Name:  "contexts",
-			Help:  "List all multi-message contexts",
+			Name: "contexts",
+			Help: "List all multi-message contexts",
 		},
 		registry.PeersCommand(),
 	}

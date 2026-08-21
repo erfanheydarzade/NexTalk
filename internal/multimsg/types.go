@@ -343,15 +343,15 @@ type LocalRecipientPolicy struct {
 	ContextID ContextID
 	Recipient string // Peer ID
 	Policy    RecipientPolicy
-	UpdatedAt int64  // Unix milliseconds
+	UpdatedAt int64 // Unix milliseconds
 }
 
 // ContextMembership represents a user's view of a context's recipients.
 // This is derived from the sender's local delivery set, not from global state.
 type ContextMembership struct {
-	ContextID  ContextID
+	ContextID   ContextID
 	DisplayName string
-	Recipients []RecipientState
+	Recipients  []RecipientState
 }
 
 // RecipientState is a recipient's delivery status from the sender's perspective.
@@ -402,7 +402,7 @@ type DeliveryResult struct {
 	DeliveryID DeliveryID
 	Recipient  string
 	Status     DeliveryStatus
-	Error      error // Non-nil if delivery failed
+	Error      error  // Non-nil if delivery failed
 	Ciphertext []byte // May be nil if delivery failed before encryption
 }
 
@@ -410,9 +410,9 @@ type DeliveryResult struct {
 type DeliveryStatus int
 
 const (
-	DeliverySent DeliveryStatus = iota
-	DeliveryPending  // No session yet, queued for retry
-	DeliveryFailed   // Encryption or send failed
+	DeliverySent    DeliveryStatus = iota
+	DeliveryPending                // No session yet, queued for retry
+	DeliveryFailed                 // Encryption or send failed
 )
 
 // String returns a human-readable delivery status.
