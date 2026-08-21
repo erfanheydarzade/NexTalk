@@ -13,6 +13,7 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
 type ChatMessage struct {
@@ -269,7 +270,7 @@ func RunWorker(api *core.Engine, workerURL string) {
 			fmt.Println("  mailbox [peer]        Show mailbox or conversation")
 			fmt.Println("  exit                  Quit")
 		case "clear":
-			fmt.Print("\033[H\033[2J")
+			ui.ClearScreen()
 			fmt.Println("=== NexTalk (Worker Transport) ===")
 			fmt.Println("init | load <id> | connect <peer> | listen | send <peer> <msg> | mailbox [peer] | clear | exit")
 
