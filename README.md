@@ -681,8 +681,20 @@ After selecting a transport, you enter a persistent shell:
 | `connect <peer_id>` | Send a handshake offer to a peer via the relay |
 | `listen` | Poll the relay inbox and automatically process offers/answers/messages |
 | `send <peer_id> <msg>` | Encrypt a message and dispatch it to the relay |
-| `mailbox` | List all active peer chats with unread indicators |
-| `mailbox <peer_id>` | Read messages from a specific peer (marks as read) |
+| `mailbox` | List all active peer chats and contexts with unread indicators |
+| `mailbox <peer_id>` | Read messages from a specific peer |
+| `context create <name>` | Create a new message context |
+| `context list` | List all contexts |
+| `context show <ctx>` | Show context details and members |
+| `context rename <ctx> <name>` | Rename a context |
+| `context add <ctx> <peer>` | Add recipient to context |
+| `context exclude <ctx> <peer>` | Exclude recipient from local delivery |
+| `context include <ctx> <peer>` | Re-enable an excluded recipient |
+| `context members <ctx>` | List context members with policies |
+| `context mute <ctx> <peer>` | Mute recipient in context |
+| `context block <ctx> <peer>` | Block recipient in context |
+| `send-multi <ctx> <msg>` | Send multi-recipient message via relay |
+| `contexts` | List all contexts (alias) |
 | `peers` | List every peer ID the shell can Tab-complete |
 | `switch` / `exit` | Return to the main transport selector |
 
@@ -690,6 +702,96 @@ The `listen` command handles the full handshake automatically:
 - Incoming **offer** → auto-accept and send answer
 - Incoming **answer** → auto-finish and activate session
 - Incoming **message** → decrypt and store in mailbox
+
+### Offline Mode Commands
+
+| Command | Description |
+|---------|-------------|
+| `init` | Create a new identity |
+| `load <id>` | Load an existing identity |
+| `offer <peer_id>` | Generate a handshake offer |
+| `accept` | Accept a handshake offer |
+| `finish` | Complete a handshake |
+| `encrypt <peer> <msg>` | Encrypt a message |
+| `decrypt` | Decrypt a message package |
+| `context create <name>` | Create a new message context |
+| `context list` | List all contexts |
+| `context show <ctx>` | Show context details and members |
+| `context rename <ctx> <name>` | Rename a context |
+| `context add <ctx> <peer>` | Add recipient to context |
+| `context exclude <ctx> <peer>` | Exclude recipient from local delivery |
+| `context include <ctx> <peer>` | Re-enable an excluded recipient |
+| `context members <ctx>` | List context members with policies |
+| `context mute <ctx> <peer>` | Mute recipient in context |
+| `context block <ctx> <peer>` | Block recipient in context |
+| `send-multi <ctx> <msg>` | Send multi-recipient message |
+| `contexts` | List all contexts (alias) |
+| `clear` | Clear the screen |
+| `exit` | Quit |
+
+---
+
+## Multi-User Messaging (Fan-Out)
+
+NexTalk supports multi-user messaging through a **fan-out architecture** — NOT a traditional group chat. There is no shared group ciphertext, no group key, and no group ratchet. Instead, a multi-user message is a logical message that is independently encrypted and delivered to each recipient through their existing 1:1 secure channel with the sender.
+
+### Architecture
+
+```
+                    MultiMessage
+                         │
+              ┌──────────┼──────────┐
+              ↓          ↓          ↓
+           Peer A      Peer B     Peer C
+              │          │          │
+           Session     Session    Session
+              │          │          │
+           Ratchet     Ratchet    Ratchet
+              │          │          │
+             AEAD       AEAD       AEAD
+```
+
+Each recipient receives a **separately encrypted copy** of the same plaintext using the existing secure channel between the sender and that recipient. Each ciphertext is cryptographically bound to its intended context, message ID, sender, and recipient via AAD to prevent transplantation attacks.
+
+### Key Concepts
+
+- **MessageID**: Unique identifier for the logical multi-recipient message
+- **DeliveryID**: Unique identifier for each individual encrypted delivery
+- **MessageContext**: Authenticated presentation metadata (display name, creator, version). Signed by the creator so an untrusted relay cannot silently rename it.
+- **MessageDelivery**: A single encrypted delivery to one recipient through their 1:1 channel. Each delivery is cryptographically independent.
+- **FanoutResult**: Per-recipient delivery status for partial fan-out failure handling
+- **Local Recipient Policy**: Each user can locally decide which recipients to include/exclude/mute/block. This is purely local state — it does not mutate any global context metadata.
+
+### Recipient Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `enabled` | Recipient receives deliveries (default) |
+| `muted` | Recipient receives deliveries, but UI may suppress notifications |
+| `blocked` | No deliveries sent to this recipient |
+| `excluded` | Recipient removed from local delivery set (same as blocked, different semantics) |
+
+### Security Properties
+
+| Property | Guarantee |
+|----------|-----------|
+| No shared group ciphertext | Each recipient gets an independent ciphertext |
+| No group key | No group encryption key exists |
+| No group ratchet | No group ratchet state |
+| No group cryptographic state | No group cryptographic primitives |
+| AAD binding | Each ciphertext bound to context, message, sender, recipient |
+| Version monotonicity | Older context versions cannot overwrite newer ones |
+| Replay detection | Duplicate deliveries are detected and rejected |
+| Local exclusion | Removing a recipient from fan-out list is purely local |
+| Authenticated context | Display name is signed by creator |
+
+### Security Limitations
+
+> **Removing a recipient does not revoke access to messages that recipient has already received.**
+>
+> Removal affects future recipient selection/delivery according to local policy, but does not provide cryptographic revocation of past messages.
+
+See [docs/groups.md](docs/groups.md) for a detailed design document.
 
 ---
 
@@ -729,6 +831,14 @@ So the two-party flow needs no ID copying after the first `connect`:
 resolves `t1d` to the full ID. If a prefix matches more than one known peer the
 command refuses with an "ambiguous peer prefix" error rather than guessing, so a
 truncated ID can never send a message to the wrong peer.
+
+**Context IDs** complete in `<context_id>` argument slots (e.g. `send-multi`, `context show`, `context add`). A context becomes completable the moment it is created via `context create`. Both the raw context ID and the display name are offered:
+
+| You did this | Result |
+|--------------|--------|
+| `context create MyGroup` | `MyGroup` and its ID both complete |
+| `send-multi <Tab>` | Lists all context IDs and display names |
+| `context show My<Tab>` | Expands to `MyGroup` |
 
 **Identities** complete in `load <id>` from the `<id>.json` profiles in the
 current directory. Run `peers` to see everything currently completable.
