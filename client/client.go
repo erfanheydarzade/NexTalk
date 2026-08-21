@@ -86,6 +86,22 @@ func LoadClient(id string) (*Client, error) {
 	return &cl, nil
 }
 
+// NewClientFromKeys wraps an existing identity (already generated or
+// imported) in a *Client with the engine wired up. Use this when the
+// caller owns the key material and persistence — e.g. the wasm build,
+// which has no filesystem for SaveClient/LoadClient.
+func NewClientFromKeys(id string, privEd ed25519.PrivateKey, pubEd ed25519.PublicKey, dilPriv, dilPub []byte, sessions map[string]*crypto.SecurePeer) *Client {
+	return &Client{
+		Id:               id,
+		IdentityPrivate:  privEd,
+		IdentityPublic:   pubEd,
+		DilithiumPrivate: dilPriv,
+		DilithiumPublic:  dilPub,
+		Sessions:         sessions,
+		eng:              core.NewEngine(),
+	}
+}
+
 // SaveClient persists the full client state (identity keys + every active
 // session) to <id>.json with owner-only permissions (0600).
 //

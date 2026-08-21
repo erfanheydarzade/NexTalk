@@ -26,6 +26,7 @@ package wasmbridge
 import (
 	"sync"
 
+	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/crypto"
 	"github.com/erfanheydarzade/NexTalk/internal/contacts"
@@ -63,6 +64,13 @@ type state struct {
 	Contacts *contacts.Store `json:"-"`
 
 	eng *core.Engine
+
+	// ActiveClient is the in-memory client.Client wrapping the identity
+	// fields above. It is the handle that multimsg.NewFanout requires for
+	// encrypt/decrypt and session lookups. Excluded from JSON export —
+	// it's a runtime handle reconstructed from the identity fields on
+	// init/import, not persisted data.
+	ActiveClient *client.Client `json:"-"`
 
 	// Live relay connection, if any. Deliberately excluded from the JSON
 	// export — it's a runtime handle, not identity/session data, and a

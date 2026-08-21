@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"syscall/js"
 
+	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/crypto"
 	"golang.org/x/crypto/ed25519"
 )
@@ -34,6 +35,7 @@ func jsInit(this js.Value, args []js.Value) any {
 	st.Sessions = make(map[string]*crypto.SecurePeer)
 	st.relayConn = nil
 	st.relayKind = ""
+	st.ActiveClient = client.NewClientFromKeys(st.Id, privEd, pubEd, dilPriv, dilPub, st.Sessions)
 
 	return ok(map[string]any{"id": st.Id})
 }
@@ -83,6 +85,7 @@ func jsImportIdentity(this js.Value, args []js.Value) any {
 	loaded.Contacts = st.Contacts // contacts are global, not per-identity — never clobbered by import
 	loaded.relayConn = nil
 	loaded.relayKind = ""
+	loaded.ActiveClient = client.NewClientFromKeys(loaded.Id, loaded.IdentityPrivate, loaded.IdentityPublic, loaded.DilithiumPrivate, loaded.DilithiumPublic, loaded.Sessions)
 	*st = loaded
 
 	return ok(map[string]any{"id": st.Id})
