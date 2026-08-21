@@ -22,6 +22,7 @@ internal/wasmbridge/
   encoding.go    proquint helpers (parity with offline mode's codec)
   contacts.go    NexTalk.contacts.* — same internal/contacts.Store as `nextalk contacts`
   sessions.go    NexTalk.sessions.* — introspection over st.Sessions, fingerprinting
+  context.go     NexTalk.context.* — multi-message context management (fan-out)
   version.go     NexTalk.version() — build/API-revision info
   register.go    wires every js.FuncOf above onto the `NexTalk` JS global
 
@@ -225,6 +226,18 @@ NexTalk.sessions.list()          // -> { sessions: [{ peerId, status }, ...] }  
 NexTalk.sessions.has(peerId)     // -> { established, pending }
 NexTalk.sessions.drop(peerId)    // -> { ok }                         forget a peer / abandon a stalled handshake
 NexTalk.sessions.fingerprint(peerId) // -> { fingerprint }             proquint of the peer's identity key, for out-of-band verification
+
+// Contexts — multi-message fan-out over independent 1:1 secure channels.
+// This is NOT a group chat protocol — each recipient gets an independent
+// ciphertext via their existing 1:1 session with the sender.
+NexTalk.context.createContext(name)              // -> { context_id, display_name, version, creator_id }
+NexTalk.context.list()                           // -> [{ context_id, display_name, version, creator_id }, ...]
+NexTalk.context.addMember(contextId, peerId)     // -> { ok }
+NexTalk.context.excludeMember(contextId, peerId) // -> { ok }               local delivery exclusion
+NexTalk.context.includeMember(contextId, peerId) // -> { ok }               re-enable excluded member
+NexTalk.context.listMembers(contextId)           // -> [{ peer_id, policy }, ...]
+NexTalk.context.sendMulti(contextId, message)    // -> { message_id, deliveries: [{ recipient, status, error }], sent, pending, failed }
+NexTalk.context.getEffectiveRecipients(contextId) // -> [peer_id, ...]
 
 // Misc
 NexTalk.version()                // -> { version, api }               build tag + JS-surface revision

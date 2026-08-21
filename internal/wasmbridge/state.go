@@ -12,7 +12,12 @@
 //	handshake.go   createOffer / acceptOffer / finishHandshake
 //	message.go     encrypt / decrypt (local ratchet, no networking)
 //	relay.go       optional live transport: connectWorker / send* / receive
+//	listen.go      auto-dispatching poll, mirrors `nextalk worker listen`
 //	encoding.go    proquint helpers, for parity with offline mode's codec
+//	contacts.go    NexTalk.contacts.* — same internal/contacts.Store as `nextalk contacts`
+//	sessions.go    NexTalk.sessions.* — introspection over st.Sessions, fingerprinting
+//	context.go     NexTalk.context.* — multi-message context management
+//	version.go     NexTalk.version() — build/API-revision info
 //	register.go    wires every js.FuncOf above onto the `NexTalk` JS global
 //
 // cmd/nextalk-wasm/main.go itself is now just a build-tag + Register() call.
@@ -24,6 +29,7 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/crypto"
 	"github.com/erfanheydarzade/NexTalk/internal/contacts"
+	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	"golang.org/x/crypto/ed25519"
 )
@@ -64,6 +70,13 @@ type state struct {
 	// than trying to resurrect an http.Client-ish thing from JSON.
 	relayConn relay.Relay `json:"-"`
 	relayKind string      `json:"-"` // "worker" | "" (not connected)
+
+	// Multi-message fanout state. These are in-memory only (no browser
+	// filesystem) and are initialized when the first context operation
+	// is requested.
+	ContextStore  multimsg.ContextStore  `json:"-"`
+	DeliveryStore multimsg.DeliveryStore `json:"-"`
+	Fanout        *multimsg.Fanout       `json:"-"`
 }
 
 var st = &state{
