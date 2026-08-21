@@ -12,6 +12,8 @@ package registry
 import (
 	"fmt"
 	"sort"
+
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
 // ArgKind describes what a single positional argument accepts, which is all the
@@ -26,6 +28,8 @@ const (
 	// ArgIdentity is a local identity `load` can take, i.e. a <id>.json profile
 	// in the current working directory.
 	ArgIdentity
+	// ArgContext is a multi-message context ID that `context` subcommands take.
+	ArgContext
 )
 
 // CommandSpec describes one command inside a transport sub-shell: its name, any
@@ -151,8 +155,6 @@ func CommandNames(specs []CommandSpec) []string {
 // RenderHelp prints the spec list as an aligned table. Transports call this
 // from Help() so help text can never drift from what completion offers.
 func RenderHelp(specs []CommandSpec) {
-	const bold, reset = "\033[1m", "\033[0m"
-
 	width := 0
 	for _, s := range specs {
 		if n := len(s.usage()); n > width {
@@ -160,10 +162,10 @@ func RenderHelp(specs []CommandSpec) {
 		}
 	}
 
-	fmt.Printf("\n%sCommands:%s\n", bold, reset)
+	fmt.Printf("\n%s\n", ui.Bold.Sprint("Commands:"))
 	for _, s := range specs {
 		fmt.Printf("  %-*s  - %s\n", width, s.usage(), s.Help)
 	}
-	fmt.Printf("\n%sTip:%s press Tab to complete commands, peer IDs, contact aliases\n", bold, reset)
+	fmt.Printf("\n%s press Tab to complete commands, peer IDs, contact aliases\n", ui.Bold.Sprint("Tip:"))
 	fmt.Println("     and local identities. Press Tab twice to list all candidates.")
 }

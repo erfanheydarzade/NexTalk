@@ -47,17 +47,29 @@ func Register() {
 	ns.Set("encoding", encodingNs)
 
 	// contacts.go — global address book, same Store as `nextalk contacts`.
-	contactsNs := js.Global().Get("Object").New()
-	contactsNs.Set("add", js.FuncOf(guard(jsContactsAdd)))
-	contactsNs.Set("remove", js.FuncOf(guard(jsContactsRemove)))
-	contactsNs.Set("rename", js.FuncOf(guard(jsContactsRename)))
-	contactsNs.Set("note", js.FuncOf(guard(jsContactsNote)))
-	contactsNs.Set("info", js.FuncOf(guard(jsContactsInfo)))
-	contactsNs.Set("list", js.FuncOf(guard(jsContactsList)))
-	contactsNs.Set("resolve", js.FuncOf(guard(jsContactsResolve)))
-	contactsNs.Set("export", js.FuncOf(guard(jsExportContacts)))
-	contactsNs.Set("import", js.FuncOf(guard(jsImportContacts)))
-	ns.Set("contacts", contactsNs)
+		contactsNs := js.Global().Get("Object").New()
+		contactsNs.Set("add", js.FuncOf(guard(jsContactsAdd)))
+		contactsNs.Set("remove", js.FuncOf(guard(jsContactsRemove)))
+		contactsNs.Set("rename", js.FuncOf(guard(jsContactsRename)))
+		contactsNs.Set("note", js.FuncOf(guard(jsContactsNote)))
+		contactsNs.Set("info", js.FuncOf(guard(jsContactsInfo)))
+		contactsNs.Set("list", js.FuncOf(guard(jsContactsList)))
+		contactsNs.Set("resolve", js.FuncOf(guard(jsContactsResolve)))
+		contactsNs.Set("export", js.FuncOf(guard(jsExportContacts)))
+		contactsNs.Set("import", js.FuncOf(guard(jsImportContacts)))
+		ns.Set("contacts", contactsNs)
+
+		// context.go — multi-message context management (fan-out over 1:1 channels).
+		contextNs := js.Global().Get("Object").New()
+		contextNs.Set("createContext", js.FuncOf(guard(jsContextCreateContext)))
+		contextNs.Set("list", js.FuncOf(guard(jsContextList)))
+		contextNs.Set("addMember", js.FuncOf(guard(jsContextAddMember)))
+		contextNs.Set("excludeMember", js.FuncOf(guard(jsContextExcludeMember)))
+		contextNs.Set("includeMember", js.FuncOf(guard(jsContextIncludeMember)))
+		contextNs.Set("listMembers", js.FuncOf(guard(jsContextListMembers)))
+		contextNs.Set("sendMulti", js.FuncOf(guard(jsContextSendMulti)))
+		contextNs.Set("getEffectiveRecipients", js.FuncOf(guard(jsContextGetEffectiveRecipients)))
+		ns.Set("context", contextNs)
 
 	// sessions.go — introspection over st.Sessions; nothing here mutates
 	// crypto state except dropSession's delete.

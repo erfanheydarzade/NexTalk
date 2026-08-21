@@ -10,9 +10,11 @@ import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -75,13 +77,31 @@ func (t *WorkerGUITransport) Commands() []registry.CommandSpec {
 			Usage: "mailbox [peer]",
 			Help:  "List chats, or read one peer's messages",
 		},
+		// Multi-message context commands
+		{
+			Name:  "context",
+			Args:  []registry.ArgKind{registry.ArgText},
+			Usage: "context <create|list|show|rename|add|exclude|include|members> ...",
+			Help:  "Manage multi-message contexts",
+		},
+		{
+			Name:     "send-multi",
+			Args:     []registry.ArgKind{registry.ArgContext, registry.ArgText},
+			Variadic: registry.ArgText,
+			Usage:    "send-multi <context_id> <message>",
+			Help:     "Send a multi-recipient message to context members",
+		},
+		{
+			Name:  "contexts",
+			Help:  "List all multi-message contexts",
+		},
 		registry.PeersCommand(),
 	}
 	return append(specs, registry.BaseCommands()...)
 }
 
 func (t *WorkerGUITransport) Init(state *registry.State) error {
-	fmt.Printf("\n\033[1m\033[34m❖ Worker Mode Engaged (Cloud Relay) ❖\033[0m\n\n")
+	fmt.Printf("\n%s\n\n", ui.Header.Sprint("❖ Worker Mode Engaged (Cloud Relay) ❖"))
 
 	if state.Worker == nil {
 		w, err := workerrelay.New(state.Config.WorkerURL)
@@ -94,6 +114,7 @@ func (t *WorkerGUITransport) Init(state *registry.State) error {
 	if state.Mailbox == nil {
 		state.Mailbox = make(map[string][]registry.ChatMessage)
 	}
+	state.InitFanout()
 	return nil
 }
 
@@ -102,16 +123,16 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 
 	case "init":
 		state.ActiveClient = Client.NewClient()
-		fmt.Printf("\033[32m  [✓]\033[0m Identity: \033[1m%s\033[0m\n", state.ActiveClient.Id)
+		fmt.Printf("  %s Identity: %s\n", ui.Success.Sprint("[✓]"), ui.Bold.Sprint(state.ActiveClient.Id))
 
 		pubHex, err := state.Worker.Register(state.Ctx, state.ActiveClient.IdentityPrivate)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Registration failed: %v\n", err)
+			ui.Errorf("Registration failed: %v", err)
 		} else if pubHex != hex.EncodeToString(state.ActiveClient.IdentityPublic) {
-			fmt.Printf("\033[33m  [!]\033[0m Identity mismatch local=%s worker=%s\n",
+			ui.Warnf("Identity mismatch local=%s worker=%s",
 				registry.ShortID(hex.EncodeToString(state.ActiveClient.IdentityPublic)), registry.ShortID(pubHex))
 		} else {
-			fmt.Printf("\033[36m  [i]\033[0m Registered with relay server.\n")
+			ui.Infof("Registered with relay server.")
 		}
 
 	case "load":
@@ -121,21 +142,21 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 		cl, err := Client.LoadClient(args[0])
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Load failed: %v\n", err)
+			ui.Errorf("Load failed: %v", err)
 			return true
 		}
 		state.ActiveClient = cl
-		fmt.Printf("\033[32m  [✓]\033[0m Loaded: %s\n", cl.Id)
+		ui.Successf("Loaded: %s", cl.Id)
 
-		// Sessions persisted in <id>.json become completable straight away,
-		// so peers from a previous run don't have to be retyped.
 		state.SyncPeersFromClient()
 
 		if _, err := state.Worker.Register(state.Ctx, cl.IdentityPrivate); err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Re-registration failed: %v\n", err)
+			ui.Errorf("Re-registration failed: %v", err)
 		} else {
-			fmt.Printf("\033[36m  [i]\033[0m Re-registered with relay server.\n")
+			ui.Infof("Re-registered with relay server.")
 		}
+
+		state.InitFanout()
 
 	case "connect":
 		if state.ActiveClient == nil {
@@ -148,33 +169,29 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 		peerID, err := state.ResolvePeer(args[0])
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			ui.Errorf("%v", err)
 			return true
 		}
 
 		offerBytes, err := state.ActiveClient.CreateOffer(peerID)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Offer creation failed: %v\n", err)
+			ui.Errorf("Offer creation failed: %v", err)
 			return true
 		}
 
 		pub, err := ed25519PubFromID(peerID)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Invalid peer ID: %v\n", err)
+			ui.Errorf("Invalid peer ID: %v", err)
 			return true
 		}
 
 		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeOffer, offerBytes); err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Send failed: %v\n", err)
+			ui.Errorf("Send failed: %v", err)
 			return true
 		}
 
-		// Record the peer as soon as the offer is out. This is the fix for
-		// the original bug: the initiator can now Tab-complete this ID for
-		// send/mailbox/connect without waiting for a reply to create a
-		// mailbox entry.
 		state.RememberPeer(peerID)
-		fmt.Printf("\033[32m  [✓]\033[0m Offer sent to %s\n", registry.ShortID(peerID))
+		ui.Successf("Offer sent to %s", registry.ShortID(peerID))
 
 	case "listen":
 		if state.ActiveClient == nil {
@@ -184,11 +201,11 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 
 		msgs, err := state.Worker.Receive(state.Ctx, state.ActiveClient.IdentityPrivate)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Receive failed: %v\n", err)
+			ui.Errorf("Receive failed: %v", err)
 			return true
 		}
 		if len(msgs) == 0 {
-			fmt.Printf("\033[36m  [i]\033[0m Inbox is empty.\n")
+			ui.Infof("Inbox is empty.")
 			return true
 		}
 
@@ -211,31 +228,31 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 		peer, err := state.ResolvePeer(args[0])
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			ui.Errorf("%v", err)
 			return true
 		}
 		message := strings.Join(args[1:], " ")
 
 		plaintext, err := readInput(message)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			ui.Errorf("%v", err)
 			return true
 		}
 
 		cipherBytes, err := state.ActiveClient.Encrypt(peer, plaintext)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Encryption failed: %v\n", err)
+			ui.Errorf("Encryption failed: %v", err)
 			return true
 		}
 
 		pub, err := ed25519PubFromID(peer)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Invalid peer ID: %v\n", err)
+			ui.Errorf("Invalid peer ID: %v", err)
 			return true
 		}
 
 		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeMessage, cipherBytes); err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Send failed: %v\n", err)
+			ui.Errorf("Send failed: %v", err)
 			return true
 		}
 
@@ -247,7 +264,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 			state.Mailbox[peer]...,
 		)
 		state.RememberPeer(peer)
-		fmt.Printf("\033[32m  [✓]\033[0m Message sent to %s\n", registry.ShortID(peer))
+		ui.Successf("Message sent to %s", registry.ShortID(peer))
 
 	case "peers":
 		state.PrintPeers("'connect <id>' or 'listen'")
@@ -258,54 +275,367 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 
 		if len(args) == 0 {
-			if len(state.Mailbox) == 0 {
-				fmt.Printf("\033[36m  [i]\033[0m Mailbox is empty.\n")
+			// Show both regular mailboxes and contexts
+			hasMailbox := len(state.Mailbox) > 0
+			hasContexts := len(state.Contexts) > 0
+
+			if !hasMailbox && !hasContexts {
+				ui.Infof("Mailbox is empty.")
 				return true
 			}
-			fmt.Printf("\n\033[1m❖ Mailboxes ❖\033[0m\n")
-			for peer, msgs := range state.Mailbox {
-				unread := 0
-				for _, m := range msgs {
-					if !m.IsRead {
-						unread++
+
+			if hasMailbox {
+				fmt.Printf("\n%s\n", ui.Bold.Sprint("❖ Mailboxes ❖"))
+				for peer, msgs := range state.Mailbox {
+					unread := 0
+					for _, m := range msgs {
+						if !m.IsRead {
+							unread++
+						}
 					}
+					indicator := ""
+					if unread > 0 {
+						indicator = ui.Warning.Sprintf(" [%d unread]", unread)
+					}
+					fmt.Printf("  %s%s\n", ui.Info.Sprint(registry.ShortID(peer)), indicator)
 				}
-				indicator := ""
-				if unread > 0 {
-					indicator = fmt.Sprintf("\033[33m [%d unread]\033[0m", unread)
-				}
-				fmt.Printf("  \033[36m%s\033[0m%s\n", registry.ShortID(peer), indicator)
 			}
-			fmt.Println("\nType 'mailbox <peer_id>' to read (Tab completes).")
+
+			if hasContexts {
+				fmt.Printf("\n%s\n", ui.Bold.Sprint("❖ Contexts ❖"))
+				for key, msgs := range state.Contexts {
+					unread := 0
+					for _, m := range msgs {
+						if !m.IsRead {
+							unread++
+						}
+					}
+					indicator := ""
+					if unread > 0 {
+						indicator = ui.Warning.Sprintf(" [%d unread]", unread)
+					}
+					// Strip "ctx:" prefix for display
+					displayKey := key
+					if len(key) > 4 && key[:4] == "ctx:" {
+						displayKey = key[4:]
+					}
+					fmt.Printf("  %s%s\n", ui.Info.Sprint(displayKey), indicator)
+				}
+			}
+
+			fmt.Println("\nType 'mailbox <peer_id>' or 'contexts <key>' to read (Tab completes).")
 			return true
 		}
 
-		// ResolvePeer replaces the old "first HasPrefix wins" loop, which
-		// could silently pick the wrong peer when two IDs shared a prefix
-		// (map iteration order is random, so it wasn't even deterministic).
-		// Ambiguous prefixes now error out instead of guessing.
 		fullPeer, err := state.ResolvePeer(args[0])
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m %v\n", err)
+			ui.Errorf("%v", err)
 			return true
 		}
 
 		msgs, ok := state.Mailbox[fullPeer]
 		if !ok {
-			fmt.Printf("\033[33m  [!]\033[0m No messages from %s\n", registry.ShortID(fullPeer))
+			ui.Warnf("No messages from %s", registry.ShortID(fullPeer))
 			return true
 		}
 
-		fmt.Printf("\n\033[1m❖ Messages with %s ❖\033[0m\n", registry.ShortID(fullPeer))
+		fmt.Printf("\n%s\n", ui.Bold.Sprintf("❖ Messages with %s ❖", registry.ShortID(fullPeer)))
 		for i, m := range msgs {
 			mark := " "
 			if !m.IsRead {
-				mark = "\033[33m*\033[0m"
+				mark = ui.Warning.Sprint("*")
 				state.Mailbox[fullPeer][i].IsRead = true
 			}
 			fmt.Printf("  [%s] %s\n", mark, m.Body)
 		}
 		fmt.Println()
+
+	case "context":
+		if state.Fanout == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+		if len(args) < 1 {
+			fmt.Println("  Usage: context <create|list|show|rename|add|exclude|include|members> ...")
+			return true
+		}
+		subCmd := args[0]
+		switch subCmd {
+		case "create":
+			if len(args) < 2 {
+				fmt.Println("  Usage: context create <name>")
+				return true
+			}
+			name := strings.Join(args[1:], " ")
+			ctx, err := state.Fanout.CreateContext(name, state.ActiveClient.IdentityPrivate)
+			if err != nil {
+				ui.Errorf("Context create failed: %v", err)
+				return true
+			}
+			ui.Successf("Context created: %s (ID: %s)", ctx.DisplayName, ctx.ContextID)
+
+		case "list", "ls":
+			ctxs, err := state.Fanout.CtxStore.ListContexts()
+			if err != nil {
+				ui.Errorf("Context list failed: %v", err)
+				return true
+			}
+			if len(ctxs) == 0 {
+				ui.Infof("No contexts.")
+				return true
+			}
+			fmt.Printf("\n%s\n", ui.Bold.Sprint("❖ Contexts ❖"))
+			for _, c := range ctxs {
+				fmt.Printf("  %s  v%d  %s\n", ui.Info.Sprint(c.ContextID), c.MetadataVersion, c.DisplayName)
+			}
+
+		case "show":
+			if len(args) < 2 {
+				fmt.Println("  Usage: context show <context_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			ctx, err := state.Fanout.CtxStore.LoadContext(ctxID)
+			if err != nil {
+				ui.Errorf("Context not found: %v", err)
+				return true
+			}
+			policies, _ := state.Fanout.ListRecipientPolicies(ctxID)
+			fmt.Printf("\n%s\n", ui.Bold.Sprintf("❖ Context: %s ❖", ctx.DisplayName))
+			fmt.Printf("  ID:      %s\n", ctx.ContextID)
+			fmt.Printf("  Version: %d\n", ctx.MetadataVersion)
+			fmt.Printf("  Creator: %s\n", ctx.CreatorID)
+			fmt.Printf("\n  Members:\n")
+			if len(policies) == 0 {
+				fmt.Println("    (none configured)")
+			}
+			for _, p := range policies {
+				icon := "✓"
+				switch p.Policy {
+				case multimsg.PolicyEnabled:
+					icon = "✓"
+				case multimsg.PolicyMuted:
+					icon = "~"
+				case multimsg.PolicyBlocked:
+					icon = "✗"
+				case multimsg.PolicyExcluded:
+					icon = "⊘"
+				}
+				fmt.Printf("    %s %s  (%s)\n", icon, registry.ShortID(p.Recipient), p.Policy.String())
+			}
+
+		case "rename":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context rename <context_id> <new_name>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			newName := strings.Join(args[2:], " ")
+			ctx, err := state.Fanout.UpdateContext(ctxID, newName, state.ActiveClient.IdentityPrivate)
+			if err != nil {
+				ui.Errorf("Context rename failed: %v", err)
+				return true
+			}
+			ui.Successf("Context renamed: %s (v%d)", ctx.DisplayName, ctx.MetadataVersion)
+
+		case "add":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context add <context_id> <peer_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			peerID, err := state.ResolvePeer(args[2])
+			if err != nil {
+				ui.Errorf("Peer resolution failed: %v", err)
+				return true
+			}
+			if err := state.Fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyEnabled); err != nil {
+				ui.Errorf("Add failed: %v", err)
+				return true
+			}
+			ui.Successf("Added %s to context %s", registry.ShortID(peerID), ctxID)
+
+		case "exclude", "remove":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context exclude <context_id> <peer_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			peerID, err := state.ResolvePeer(args[2])
+			if err != nil {
+				ui.Errorf("Peer resolution failed: %v", err)
+				return true
+			}
+			if err := state.Fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyExcluded); err != nil {
+				ui.Errorf("Exclude failed: %v", err)
+				return true
+			}
+			ui.Successf("Excluded %s from context %s (local delivery exclusion)", registry.ShortID(peerID), ctxID)
+
+		case "include":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context include <context_id> <peer_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			peerID, err := state.ResolvePeer(args[2])
+			if err != nil {
+				ui.Errorf("Peer resolution failed: %v", err)
+				return true
+			}
+			if err := state.Fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyEnabled); err != nil {
+				ui.Errorf("Include failed: %v", err)
+				return true
+			}
+			ui.Successf("Re-enabled %s in context %s", registry.ShortID(peerID), ctxID)
+
+		case "block":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context block <context_id> <peer_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			peerID, err := state.ResolvePeer(args[2])
+			if err != nil {
+				ui.Errorf("Peer resolution failed: %v", err)
+				return true
+			}
+			if err := state.Fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyBlocked); err != nil {
+				ui.Errorf("Block failed: %v", err)
+				return true
+			}
+			ui.Successf("Blocked %s in context %s", registry.ShortID(peerID), ctxID)
+
+		case "mute":
+			if len(args) < 3 {
+				fmt.Println("  Usage: context mute <context_id> <peer_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			peerID, err := state.ResolvePeer(args[2])
+			if err != nil {
+				ui.Errorf("Peer resolution failed: %v", err)
+				return true
+			}
+			if err := state.Fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyMuted); err != nil {
+				ui.Errorf("Mute failed: %v", err)
+				return true
+			}
+			ui.Successf("Muted %s in context %s", registry.ShortID(peerID), ctxID)
+
+		case "members":
+			if len(args) < 2 {
+				fmt.Println("  Usage: context members <context_id>")
+				return true
+			}
+			ctxID := multimsg.ContextID(args[1])
+			ctx, err := state.Fanout.CtxStore.LoadContext(ctxID)
+			if err != nil {
+				ui.Errorf("Context not found: %v", err)
+				return true
+			}
+			policies, _ := state.Fanout.ListRecipientPolicies(ctxID)
+			fmt.Printf("\n%s\n", ui.Bold.Sprintf("❖ Members of %s ❖", ctx.DisplayName))
+			if len(policies) == 0 {
+				fmt.Println("    (none configured)")
+			}
+			for _, p := range policies {
+				icon := "✓"
+				switch p.Policy {
+				case multimsg.PolicyEnabled:
+					icon = "✓"
+				case multimsg.PolicyMuted:
+					icon = "~"
+				case multimsg.PolicyBlocked:
+					icon = "✗"
+				case multimsg.PolicyExcluded:
+					icon = "⊘"
+				}
+				fmt.Printf("    %s %s  [%s]\n", icon, registry.ShortID(p.Recipient), p.Policy.String())
+			}
+
+		default:
+			ui.Errorf("Unknown context subcommand: %s", subCmd)
+		}
+
+	case "send-multi":
+		if state.Fanout == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+		if len(args) < 2 {
+			fmt.Println("  Usage: send-multi <context_id> <message>")
+			return true
+		}
+		ctxID := multimsg.ContextID(args[0])
+		message := strings.Join(args[1:], " ")
+
+		// Get effective recipients from context policies
+		policies, err := state.Fanout.ListRecipientPolicies(ctxID)
+		if err != nil {
+			ui.Errorf("Context not found: %v", err)
+			return true
+		}
+		var recipients []string
+		for _, p := range policies {
+			if p.Policy != multimsg.PolicyBlocked && p.Policy != multimsg.PolicyExcluded {
+				recipients = append(recipients, p.Recipient)
+			}
+		}
+		if len(recipients) == 0 {
+			ui.Warnf("No enabled recipients in context %s", ctxID)
+			return true
+		}
+
+		result, err := state.Fanout.SendMultiMessage(state.Ctx, ctxID, []byte(message), recipients)
+		if err != nil {
+			ui.Errorf("Multi-send failed: %v", err)
+			return true
+		}
+
+		fmt.Printf("\n%s\n", ui.Bold.Sprintf("❖ Multi-message: %s ❖", result.MessageID))
+		fmt.Printf("  Context: %s\n", ctxID)
+		fmt.Printf("\n  Deliveries:\n")
+		for _, d := range result.Deliveries {
+			icon := " "
+			status := ""
+			switch d.Status {
+			case multimsg.DeliverySent:
+				icon = ui.Success.Sprint("✓")
+				status = "sent"
+			case multimsg.DeliveryPending:
+				icon = ui.Warning.Sprint("~")
+				status = "pending (no session)"
+			case multimsg.DeliveryFailed:
+				icon = ui.Fail.Sprint("✗")
+				status = "failed"
+				if d.Error != nil {
+					status += ": " + d.Error.Error()
+				}
+			}
+			fmt.Printf("    %s %s  %s\n", icon, registry.ShortID(d.Recipient), status)
+		}
+		fmt.Printf("\n  Summary: %d sent, %d pending, %d failed\n",
+			result.SuccessCount(), result.PendingCount(), result.FailedCount())
+
+	case "contexts":
+		if state.Fanout == nil {
+			fmt.Println("  Please 'init' or 'load' an identity first.")
+			return true
+		}
+		ctxs, err := state.Fanout.CtxStore.ListContexts()
+		if err != nil {
+			ui.Errorf("Context list failed: %v", err)
+			return true
+		}
+		if len(ctxs) == 0 {
+			ui.Infof("No contexts.")
+			return true
+		}
+		fmt.Printf("\n%s\n", ui.Bold.Sprint("❖ Contexts ❖"))
+		for _, c := range ctxs {
+			fmt.Printf("  %s  v%d  %s\n", ui.Info.Sprint(c.ContextID), c.MetadataVersion, c.DisplayName)
+		}
 
 	case "help":
 		t.Help()
@@ -314,66 +644,57 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		return false
 
 	default:
-		fmt.Printf("\033[31m  [✗]\033[0m Unknown command. Type 'help'.\n")
+		ui.Errorf("Unknown command. Type 'help'.")
 	}
 	return true
 }
 
 func (t *WorkerGUITransport) Help() {
-	// Rendered from the same specs that drive Tab completion, so the two can
-	// never disagree about what exists.
 	registry.RenderHelp(t.Commands())
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-// dispatchGUI routes a decoded (type, data) envelope pair and updates state in place.
-//
-// Every branch calls state.RememberPeer so the peer becomes Tab-completable
-// the moment it is seen. This is the responder-side half of the completion
-// bug: user B runs `listen`, receives an offer from user A, and previously had
-// no way to Tab-complete A's ID afterwards because no mailbox entry existed
-// until A sent an actual message.
 func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 	switch t {
 
 	case relay.TypeOffer:
 		var offer core.HandShakeOffer
 		if err := json.Unmarshal(data, &offer); err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Bad offer payload: %v\n", err)
+			ui.Errorf("Bad offer payload: %v", err)
 			return
 		}
 		ansBytes, err := state.ActiveClient.AcceptOffer(data)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Accept offer failed: %v\n", err)
+			ui.Errorf("Accept offer failed: %v", err)
 			return
 		}
 		pub, err := ed25519PubFromID(offer.SenderId)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Invalid sender ID: %v\n", err)
+			ui.Errorf("Invalid sender ID: %v", err)
 			return
 		}
 		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeAnswer, ansBytes); err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Send answer failed: %v\n", err)
+			ui.Errorf("Send answer failed: %v", err)
 			return
 		}
 		state.RememberPeer(offer.SenderId)
-		fmt.Printf("\033[32m  [✓]\033[0m Auto-answered offer from %s\n", registry.ShortID(offer.SenderId))
-		fmt.Printf("\033[36m  [i]\033[0m %s is now Tab-completable — try 'send <Tab>'.\n", registry.ShortID(offer.SenderId))
+		ui.Successf("Auto-answered offer from %s", registry.ShortID(offer.SenderId))
+		ui.Infof("%s is now Tab-completable — try 'send <Tab>'.", registry.ShortID(offer.SenderId))
 
 	case relay.TypeAnswer:
 		peerID, err := state.ActiveClient.FinishHandshake(data)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Handshake finish failed: %v\n", err)
+			ui.Errorf("Handshake finish failed: %v", err)
 			return
 		}
 		state.RememberPeer(peerID)
-		fmt.Printf("\033[32m  [✓]\033[0m Session established with: %s\n", registry.ShortID(peerID))
+		ui.Successf("Session established with: %s", registry.ShortID(peerID))
 
 	case relay.TypeMessage:
 		senderID, pt, err := state.ActiveClient.Decrypt(data)
 		if err != nil {
-			fmt.Printf("\033[31m  [✗]\033[0m Decrypt failed: %v\n", err)
+			ui.Errorf("Decrypt failed: %v", err)
 			return
 		}
 		if state.Mailbox == nil {
@@ -384,9 +705,35 @@ func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
 			state.Mailbox[senderID]...,
 		)
 		state.RememberPeer(senderID)
-		fmt.Printf("\033[35m  [✉]\033[0m New message from %s — check 'mailbox'.\n", registry.ShortID(senderID))
+		ui.Mailf("New message from %s — check 'mailbox'.", registry.ShortID(senderID))
+
+	case relay.TypeMultiMsg:
+		// Process multi-message delivery
+		if state.Fanout == nil {
+			ui.Warnf("Multi-message received but fanout not initialized")
+			return
+		}
+		// For now, treat multi-message like a regular message
+		// The fanout layer handles deduplication and grouping
+		senderID, pt, err := state.ActiveClient.Decrypt(data)
+		if err != nil {
+			ui.Errorf("Multi-message decrypt failed: %v", err)
+			return
+		}
+		if state.Mailbox == nil {
+			state.Mailbox = make(map[string][]registry.ChatMessage)
+		}
+		// Store in context-specific mailbox if we can identify the context
+		// For now, store in sender's mailbox with a prefix
+		contextKey := "ctx:" + senderID
+		state.Contexts[contextKey] = append(
+			[]registry.ChatMessage{{Body: "[multi] " + string(pt), IsRead: false}},
+			state.Contexts[contextKey]...,
+		)
+		state.RememberPeer(senderID)
+		ui.Mailf("Multi-message from %s — check contexts.", registry.ShortID(senderID))
 
 	default:
-		fmt.Printf("\033[33m  [!]\033[0m Unknown envelope type: %d\n", t)
+		ui.Warnf("Unknown envelope type: %d", t)
 	}
 }

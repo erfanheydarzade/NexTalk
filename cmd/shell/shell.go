@@ -16,19 +16,12 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
-const (
-	reset = "\033[0m"
-	bold  = "\033[1m"
-	cyan  = "\033[36m"
-	green = "\033[32m"
-	red   = "\033[31m"
-)
+func clearScreen() { ui.ClearScreen() }
 
-func clearScreen() { fmt.Print("\033[H\033[2J") }
-
-func printError(msg string, args ...any) { fmt.Printf(red+"  [✗] "+reset+msg+"\n", args...) }
+func printError(msg string, args ...any) { ui.Errorf(msg, args...) }
 
 // RuntimeState is an alias for registry.State, NOT a separate struct.
 // registry.GUITransport.Execute/Init are defined against *registry.State — if
@@ -39,9 +32,10 @@ type RuntimeState = registry.State
 
 func printMainMenu(entries []registry.Entry) {
 	clearScreen()
-	fmt.Printf("%s%s╔════════════════════════════════════════╗%s\n", bold, cyan, reset)
-	fmt.Printf("%s%s║               NexTalk CLI              ║%s\n", bold, cyan, reset)
-	fmt.Printf("%s%s╚════════════════════════════════════════╝%s\n\n", bold, cyan, reset)
+	ui.BoldCyan.Println("╔════════════════════════════════════════╗")
+	ui.BoldCyan.Println("║               NexTalk CLI              ║")
+	ui.BoldCyan.Println("╚════════════════════════════════════════╝")
+	fmt.Println()
 
 	for i, e := range entries {
 		if e.GUI != nil {
@@ -61,7 +55,7 @@ func RunGUI(api *core.Engine, cfg config.Config) {
 
 	for {
 		printMainMenu(entries)
-		fmt.Printf("%sSelect ❯%s ", bold, reset)
+		ui.Bold.Print("Select ❯ ")
 
 		if !scanner.Scan() {
 			return
@@ -69,7 +63,7 @@ func RunGUI(api *core.Engine, cfg config.Config) {
 		choice := strings.TrimSpace(scanner.Text())
 
 		if choice == exitChoice || choice == "exit" || choice == "q" {
-			fmt.Printf("  %s[i]%s Goodbye!\n", cyan, reset)
+			ui.Infof("Goodbye!")
 			return
 		}
 
@@ -101,7 +95,7 @@ func RunGUI(api *core.Engine, cfg config.Config) {
 // end-to-end rather than by calling Do directly.
 func readlineConfig(state *RuntimeState, t registry.GUITransport) *readline.Config {
 	return &readline.Config{
-		Prompt:       fmt.Sprintf("%s╰─❯ %s", green, reset),
+		Prompt:       ui.Success.Sprint("╰─❯ "),
 		AutoComplete: newShellCompleter(state, t),
 		// HistoryFile is deliberately unset: shell input lines can contain
 		// pasted handshake/ciphertext blobs, and persisting those to disk in
@@ -116,7 +110,10 @@ func readlineConfig(state *RuntimeState, t registry.GUITransport) *readline.Conf
 // transport's name and the completer is bound to that transport's own command
 // specs (see completer.go) rather than one shared hard-coded list.
 func runSubShell(state *RuntimeState, t registry.GUITransport) {
-	fmt.Printf("\n%s╭─[%snextalk:%s%s]\n", cyan, green, t.Name(), cyan)
+	fmt.Printf("\n%s%s%s\n",
+		ui.Info.Sprint("╭─["),
+		ui.Success.Sprintf("nextalk:%s", t.Name()),
+		ui.Info.Sprint("]"))
 
 	rl, err := readline.NewEx(readlineConfig(state, t))
 	if err != nil {

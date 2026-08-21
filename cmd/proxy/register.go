@@ -7,6 +7,7 @@ import (
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +38,7 @@ func (t *ProxyGUITransport) Name() string      { return "proxy" }
 func (t *ProxyGUITransport) MenuLabel() string { return "3. Proxy Mode    (Anonymized Routing)" }
 
 func (t *ProxyGUITransport) Init(state *registry.State) error {
-	fmt.Printf("\n  \033[1m\033[34m❖ Proxy Mode ❖\033[0m\n\n")
+	fmt.Printf("\n  %s\n\n", ui.Header.Sprint("❖ Proxy Mode ❖"))
 	return nil
 }
 

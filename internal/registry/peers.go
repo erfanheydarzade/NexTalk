@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/erfanheydarzade/NexTalk/internal/contacts"
+	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
 // pendingPrefix marks the placeholder entries client.Client stores in its
@@ -213,17 +214,15 @@ func (s *State) ResolvePeer(input string) (string, error) {
 // the transport's own way of learning a peer, shown when nothing is known yet.
 // Shared by every transport's `peers` command so the output can't diverge.
 func (s *State) PrintPeers(hint string) {
-	const bold, cyan, reset = "\033[1m", "\033[36m", "\033[0m"
-
 	candidates := s.PeerCandidates()
 	if len(candidates) == 0 {
-		fmt.Printf("%s  [i]%s No known peers yet — %s first.\n", cyan, reset, hint)
+		fmt.Printf("  %s No known peers yet — %s first.\n", ui.Info.Sprint("[i]"), hint)
 		return
 	}
 
-	fmt.Printf("\n%s❖ Completable peers ❖%s\n", bold, reset)
+	fmt.Printf("\n%s\n", ui.Bold.Sprint("❖ Completable peers ❖"))
 	for _, p := range candidates {
-		fmt.Printf("  %s%s%s\n", cyan, p, reset)
+		fmt.Printf("  %s\n", ui.Info.Sprint(p))
 	}
 	fmt.Println("\nAny of these completes with Tab in a <peer> slot.")
 }
