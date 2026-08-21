@@ -21,18 +21,18 @@ import (
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 )
 
-// ─── REQUIRED relay package additions (v2.2 replication) ────────────────────
+// ─── relay package additions used by this file ─────────────────────────────
 //
-// This file assumes the following NEW fields exist on types defined in the
-// sibling `relay` package (not shown here — add them there):
+// The following fields/types must exist on relay.* (add them there if they
+// don't yet — they are additive only, so older code paths are unaffected):
 //
 //   relay.RoutingTable:
-//     Shards            []relay.ShardIdentity `json:"shards"`             // {URL, PublicKey}
+//     Shards            []relay.ShardIdentity `json:"shards"`
 //     ReplicationFactor int                    `json:"replication_factor"`
 //
 //   relay.ShardIdentity (new type):
 //     URL       string `json:"url"`
-//     PublicKey string `json:"pubkey"` // hex, may be empty for legacy/manual shards
+//     PublicKey string `json:"pubkey"`
 //
 //   relay.MailboxCapability:
 //     ReplicaShardURLs []string `json:"replica_shard_urls"`
@@ -40,11 +40,48 @@ import (
 //   relay.PeerResolution:
 //     ReplicaShardURLs []string `json:"replica_shard_urls"`
 //
-// Everything else (Register/Resolve/Send/Receive call shapes) is unchanged;
-// these are purely additive fields the Router now includes in its JSON
-// responses (see router.js handleRegister / handleResolve). A client built
-// against the OLD relay types still works — it'll just never see replicas
-// and always talk to a single shard, same as v2.1.
+// All of these were checked field-by-field against the actual JSON emitted
+// by router/router.js (buildSignedRoutingTable, handleRegister,
+// handleResolve) and shard/worker.js (handleSend, handleRead) — the tags
+// above are exactly what the servers send/expect.
+//
+// relay.Message, relay.Type (with TypeOffer/TypeAnswer/TypeMessage/...),
+// relay.Relay, relay.SenderAuth, and relay.BuildSenderAuth are assumed to
+// already exist, since the rest of the codebase (cmd/worker) is built
+// against them directly.
+
+// verifyRoutingTableSignature checks table's signature against a pinned
+// Router public key (hex-encoded Ed25519 pubkey). It's a free function
+// (not a method) since relay.RoutingTable is defined in another package.
+// Callers should pin the key out-of-band rather than trusting
+// table.RouterPublicKey itself — that field is just an unauthenticated
+// hint of which key was used, same as router.js documents. This matters
+// because a shard is now in the serving path for routing_table.json: a
+// shard is untrusted storage, so verifying the Router's signature (not
+// just TLS to the shard) is what actually keeps a compromised or
+// malicious shard from feeding a forged table.
+func verifyRoutingTableSignature(table *relay.RoutingTable, routerPubkeyHex, signatureHex string) error {
+	pub, err := hex.DecodeString(routerPubkeyHex)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid router public key")
+	}
+	sig, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return fmt.Errorf("invalid routing table signature encoding: %w", err)
+	}
+	// Re-encode the same struct minus the signature field. json.Marshal on
+	// a struct emits fields in declaration order, which must match
+	// buildSignedRoutingTable's key order in router.js for the bytes (and
+	// therefore the signature) to line up.
+	canonical, err := json.Marshal(table)
+	if err != nil {
+		return fmt.Errorf("re-encode routing table for verification: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), canonical, sig) {
+		return fmt.Errorf("routing table signature verification failed")
+	}
+	return nil
+}
 
 // ─── Router client: routing table + capability + resolve caching ───────────
 //
@@ -53,6 +90,7 @@ import (
 //   - once per RoutingTable TTL / version bump (shared across all peers)
 //   - once ever per own identity (Register)
 //   - once ever per peer pubkey messaged (Resolve)
+//
 // After that, Send/Receive talk to shards directly and never call these.
 
 type RouterClient struct {
@@ -78,13 +116,15 @@ func NewRouterClient(routerURL string) *RouterClient {
 // missing or expired. This is the low-frequency call every other cache's
 // freshness is judged against.
 //
-// As of v2.1, the Router no longer wants to be the common source for this:
-// it computes and signs the table, then PUSHES it out to every shard, and
-// each shard now serves GET /routing_table.json itself from that pushed
-// copy. So a refetch here prefers asking a shard we already know about
-// (from the table we're refreshing) and only falls back to the Router
-// directly — bootstrap (first-ever call, nothing cached yet) or every
-// known shard being unreachable/stale.
+// The Router computes and signs the table, then pushes it out to every
+// shard (see router.js pushRoutingTableToShards / POST /internal/routing_table),
+// and each shard serves GET /routing_table.json itself from that pushed
+// copy (shard/worker.js handleRoutingTableServe). So a refetch here prefers
+// asking a shard we already know about (from the table we're refreshing)
+// and only falls back to the Router directly — bootstrap (first-ever call,
+// nothing cached yet) or every known shard being unreachable/stale/never
+// having received a push yet (a fresh shard answers 503, which
+// fetchRoutingTableFrom below treats as a failure and moves on).
 func (rc *RouterClient) RoutingTable(ctx context.Context) (*relay.RoutingTable, error) {
 	rc.mu.RLock()
 	cached := rc.table
@@ -123,32 +163,34 @@ func (rc *RouterClient) RoutingTable(ctx context.Context) (*relay.RoutingTable, 
 	return table, nil
 }
 
-func (rc *RouterClient) fetchRoutingTableFrom(ctx context.Context, url string) (*relay.RoutingTable, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (rc *RouterClient) fetchRoutingTableFrom(ctx context.Context, target string) (*relay.RoutingTable, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create routing_table request: %w", err)
 	}
 	resp, err := rc.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch routing_table from %s: %w", url, err)
+		return nil, fmt.Errorf("fetch routing_table from %s: %w", target, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s returned status %d for routing_table.json", url, resp.StatusCode)
+		// A shard that never received a push answers 503 here (see
+		// shard/worker.js handleRoutingTableServe) — treated the same as
+		// any other failure: the caller moves on to the next candidate.
+		return nil, fmt.Errorf("%s returned status %d for routing_table.json", target, resp.StatusCode)
 	}
 
 	var table relay.RoutingTable
 	if err := json.NewDecoder(resp.Body).Decode(&table); err != nil {
-		return nil, fmt.Errorf("decode routing_table from %s: %w", url, err)
+		return nil, fmt.Errorf("decode routing_table from %s: %w", target, err)
 	}
-	// Callers wanting strict verification should Ed25519-verify `table.Signature`
-	// against `table.RouterPublicKey` over the canonical body here; omitted
-	// for brevity but REQUIRED in a production client — pin the Router's
-	// public key out-of-band rather than trusting whatever a shard or the
-	// Router hands back. This matters MORE now that a shard is in the
-	// serving path: a shard is untrusted storage, so the client verifying
-	// the Router's signature (not just TLS to the shard) is what actually
-	// keeps a compromised or malicious shard from feeding a forged table.
+	// Callers wanting strict verification should call table.Verify(pinnedKey)
+	// against the Router's public key pinned out-of-band, rather than
+	// trusting table.RouterPublicKey (an unauthenticated hint) or bare TLS
+	// to whichever shard answered. This matters MORE now that a shard is in
+	// the serving path: a shard is untrusted storage, so verifying the
+	// Router's signature is what actually keeps a compromised or malicious
+	// shard from feeding a forged table.
 
 	return &table, nil
 }
@@ -228,10 +270,23 @@ func (rc *RouterClient) Resolve(ctx context.Context, peerPubkeyHex string) (rela
 		return relay.PeerResolution{}, fmt.Errorf("decode resolve response: %w", err)
 	}
 
+	// A resolve for a mailbox that doesn't exist yet still comes back 200
+	// with a best-guess current-era location and a "note" field (see
+	// router.js handleResolve) — cache it anyway; the caller finds out for
+	// real when /send 404s, at which point the cache should be dropped.
 	rc.mu.Lock()
 	rc.resolutions[peerPubkeyHex] = res
 	rc.mu.Unlock()
 	return res, nil
+}
+
+// ForgetResolution drops a cached peer resolution, e.g. after a Send fails
+// with "mailbox not found" — the cached shard_url may be stale because the
+// mesh was resized since it was cached.
+func (rc *RouterClient) ForgetResolution(peerPubkeyHex string) {
+	rc.mu.Lock()
+	delete(rc.resolutions, strings.ToLower(peerPubkeyHex))
+	rc.mu.Unlock()
 }
 
 func signPubkeyTimestamp(priv ed25519.PrivateKey, action string) (pubkeyHex, timestamp, signatureHex string) {
@@ -245,8 +300,8 @@ func signPubkeyTimestamp(priv ed25519.PrivateKey, action string) (pubkeyHex, tim
 
 // ─── Adapter: talks directly to shards ──────────────────────────────────────
 //
-// Adapter satisfies relay.Relay. It no longer resolves its own worker URL
-// per instance — every call carries the shard URL that came from the
+// Adapter satisfies relay.Relay. It doesn't resolve its own worker URL per
+// instance — every call carries the shard URL that came from the
 // RouterClient's cached capability/resolution, since different mailboxes
 // (even for the same running process, e.g. multiple contacts) may live on
 // different shards.
@@ -331,6 +386,11 @@ type sendRequestBody struct {
 	Sender    relay.SenderAuth `json:"sender"`
 }
 
+type sendResponseBody struct {
+	Success bool `json:"success"`
+	Queued  int  `json:"queued"`
+}
+
 // Send resolves recipientMailboxID's shard via the (cached) Router
 // resolution the caller looked up ahead of time and talks to it directly.
 // Callers should obtain recipientMailboxID via a prior call to
@@ -339,6 +399,8 @@ type sendRequestBody struct {
 func (a *Adapter) sendToShard(ctx context.Context, shardURL, recipientMailboxID string, payload []byte, senderPriv ed25519.PrivateKey) error {
 	encodedMessage := base64.StdEncoding.EncodeToString(payload)
 
+	// shard/worker.js hashes the exact "message" string it receives, so the
+	// auth must be built over encodedMessage's bytes, not the raw payload.
 	senderAuth, err := relay.BuildSenderAuth(senderPriv, recipientMailboxID, []byte(encodedMessage))
 	if err != nil {
 		return fmt.Errorf("build sender auth: %w", err)
@@ -364,6 +426,13 @@ func (a *Adapter) sendToShard(ctx context.Context, shardURL, recipientMailboxID 
 	if resp.StatusCode != http.StatusOK {
 		return readAPIError(resp)
 	}
+	var result sendResponseBody
+	if err := decodeJSONResponse(resp, &result); err != nil {
+		return fmt.Errorf("decode send response: %w", err)
+	}
+	if !result.Success {
+		return fmt.Errorf("shard %s rejected the message", shardURL)
+	}
 	return nil
 }
 
@@ -374,8 +443,13 @@ func (a *Adapter) sendToShard(ctx context.Context, shardURL, recipientMailboxID 
 // fanning it out to the rest of its own replica set itself (see
 // shard/worker.js replicateToSiblings), so we deliberately do NOT fan out
 // from the client side too, which would just duplicate the message N times.
+//
+// If every candidate reports the mailbox missing (404 — recipient hasn't
+// registered, or the mesh was resized since we cached the resolution), the
+// cached resolution is dropped so the next attempt re-resolves.
 func (a *Adapter) SendToPubkey(ctx context.Context, recipientPubKey []byte, payload []byte, senderPriv ed25519.PrivateKey) error {
-	res, err := a.router.Resolve(ctx, hex.EncodeToString(recipientPubKey))
+	peerPubkeyHex := hex.EncodeToString(recipientPubKey)
+	res, err := a.router.Resolve(ctx, peerPubkeyHex)
 	if err != nil {
 		return fmt.Errorf("resolve recipient: %w", err)
 	}
@@ -383,18 +457,25 @@ func (a *Adapter) SendToPubkey(ctx context.Context, recipientPubKey []byte, payl
 	candidates := candidateShardURLs(res.ShardURL, res.ReplicaShardURLs)
 
 	var lastErr error
+	allNotFound := true
 	for _, shardURL := range candidates {
 		lastErr = a.sendToShard(ctx, shardURL, res.MailboxID, payload, senderPriv)
 		if lastErr == nil {
 			return nil
 		}
+		if !strings.Contains(lastErr.Error(), "Mailbox not found") {
+			allNotFound = false
+		}
+	}
+	if allNotFound {
+		a.router.ForgetResolution(peerPubkeyHex)
 	}
 	return fmt.Errorf("send failed on all %d known replica(s): %w", len(candidates), lastErr)
 }
 
 // candidateShardURLs returns primary followed by any other replicas, with
-// no duplicates, tolerating a nil/empty replica list (pre-v2.2 Router, or
-// REPLICATION_FACTOR=1).
+// no duplicates, tolerating a nil/empty replica list (single-shard
+// deployment, or REPLICATION_FACTOR=1 — see router.js replicationFactor).
 func candidateShardURLs(primary string, replicas []string) []string {
 	seen := map[string]bool{primary: true}
 	out := []string{primary}
@@ -479,7 +560,9 @@ func (a *Adapter) receiveCapability(ctx context.Context, cap relay.MailboxCapabi
 		if err != nil {
 			decoded = []byte(m.Message)
 		}
-		msgs = append(msgs, relay.Message{Body: decoded})
+		msgs = append(msgs, relay.Message{
+			Body: decoded,
+		})
 	}
 	return msgs, nil
 }
@@ -515,7 +598,11 @@ func (a *Adapter) Receive(
 	return nil, fmt.Errorf("receive failed on all known replica(s): %w", lastErr)
 }
 
-// UnwrapEnvelope splits a raw binary payload back into its Type and Data.
+// UnwrapEnvelope splits a raw binary payload back into its Type and Data,
+// using relay.Type (the same type cmd/worker switches on via
+// relay.TypeOffer / relay.TypeAnswer / relay.TypeMessage / ...) rather than
+// a locally-defined type — the two must be identical for callers elsewhere
+// in the codebase to type-check.
 func UnwrapEnvelope(raw []byte) (relay.Type, []byte, error) {
 	if len(raw) < 1 {
 		return 0, nil, fmt.Errorf("envelope too short: %d bytes", len(raw))
