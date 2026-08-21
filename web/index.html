@@ -84,13 +84,40 @@
   </fieldset>
 
   <fieldset>
-    <legend>5. Chat</legend>
-    <div class="row">
-      <input id="chatPeer" type="text" placeholder="established peer id" />
-      <input id="chatText" type="text" placeholder="message" />
-      <button id="btnSend">encrypt + send</button>
-    </div>
-  </fieldset>
+      <legend>5. Chat</legend>
+      <div class="row">
+        <input id="chatPeer" type="text" placeholder="established peer id" />
+        <input id="chatText" type="text" placeholder="message" />
+        <button id="btnSend">encrypt + send</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>6. Multi-Message Context</legend>
+      <div class="row">
+        <input id="ctxName" type="text" placeholder="context name" />
+        <button id="btnCreateCtx">createContext</button>
+      </div>
+      <div class="row">
+        <button id="btnListCtx">list contexts</button>
+        <button id="btnRefreshCtx">refresh</button>
+      </div>
+      <div class="row">
+        <input id="ctxId" type="text" placeholder="context id" style="width:15rem" />
+        <input id="ctxPeer" type="text" placeholder="peer id" style="width:10rem" />
+        <button id="btnAddMember">addMember</button>
+        <button id="btnExclude">exclude</button>
+        <button id="btnInclude">include</button>
+      </div>
+      <div class="row">
+        <button id="btnListMembers">listMembers</button>
+        <button id="btnGetEffective">getEffectiveRecipients</button>
+      </div>
+      <div class="row">
+        <input id="ctxMsg" type="text" placeholder="multi-message text" style="width:20rem" />
+        <button id="btnSendMulti">sendMulti</button>
+      </div>
+    </fieldset>
 
   <div id="log"></div>
 
@@ -622,81 +649,381 @@
     }
 
     /*
-     * START / STOP LISTENING
-     */
-    const btnListen =
-      document.getElementById("btnListen");
-
-    if (btnListen) {
-      btnListen.onclick = safe(() => {
-        /*
-         * STOP
+         * START / STOP LISTENING
          */
-        if (isListening) {
-          isListening = false;
+        const btnListen =
+          document.getElementById("btnListen");
 
-          if (listenTimer !== null) {
-            clearTimeout(listenTimer);
-            listenTimer = null;
-          }
+        if (btnListen) {
+          btnListen.onclick = safe(() => {
+            /*
+             * STOP
+             */
+            if (isListening) {
+              isListening = false;
 
-          const listenStatus =
-            document.getElementById(
-              "listenStatus"
+              if (listenTimer !== null) {
+                clearTimeout(listenTimer);
+                listenTimer = null;
+              }
+
+              const listenStatus =
+                document.getElementById(
+                  "listenStatus"
+                );
+
+              if (listenStatus) {
+                listenStatus.textContent =
+                  "stopped";
+              }
+
+              btnListen.textContent =
+                "Start listening";
+
+              log(
+                "[listen] stopped"
+              );
+
+              return;
+            }
+
+            /*
+             * START
+             */
+            if (
+              typeof NexTalk === "undefined" ||
+              !NexTalk.relay ||
+              typeof NexTalk.relay.listen !==
+                "function"
+            ) {
+              return log(
+                "[listen]",
+                "NexTalk.relay.listen is not available"
+              );
+            }
+
+            isListening = true;
+
+            const listenStatus =
+              document.getElementById(
+                "listenStatus"
+              );
+
+            if (listenStatus) {
+              listenStatus.textContent =
+                "listening...";
+            }
+
+            btnListen.textContent =
+              "Stop listening";
+
+            log(
+              "[listen] started"
             );
 
-          if (listenStatus) {
-            listenStatus.textContent =
-              "stopped";
-          }
-
-          btnListen.textContent =
-            "Start listening";
-
-          log(
-            "[listen] stopped"
-          );
-
-          return;
+            pollListen();
+          });
         }
 
         /*
-         * START
+         * MULTI-MESSAGE CONTEXT
          */
-        if (
-          typeof NexTalk === "undefined" ||
-          !NexTalk.relay ||
-          typeof NexTalk.relay.listen !==
-            "function"
-        ) {
-          return log(
-            "[listen]",
-            "NexTalk.relay.listen is not available"
-          );
+        const btnCreateCtx =
+          document.getElementById("btnCreateCtx");
+        if (btnCreateCtx) {
+          btnCreateCtx.onclick = safe(() => {
+            const nameInput =
+              document.getElementById("ctxName");
+            const name = nameInput
+              ? nameInput.value.trim()
+              : "";
+            if (!name) {
+              return log("[context]", "enter a context name");
+            }
+            if (
+              typeof NexTalk === "undefined" ||
+              !NexTalk.context ||
+              typeof NexTalk.context.createContext !==
+                "function"
+            ) {
+              return log(
+                "[context.createContext]",
+                "not available"
+              );
+            }
+            const result = call(
+              NexTalk.context.createContext,
+              name
+            );
+            if (result && result.error) {
+              return log("[context.createContext]", result.error);
+            }
+            log(
+              "[context.createContext]",
+              "created:",
+              result
+            );
+            if (nameInput) {
+              nameInput.value = "";
+            }
+            if (result && result.context_id) {
+              const ctxId =
+                document.getElementById("ctxId");
+              if (ctxId) {
+                ctxId.value = result.context_id;
+              }
+            }
+          });
         }
 
-        isListening = true;
-
-        const listenStatus =
-          document.getElementById(
-            "listenStatus"
-          );
-
-        if (listenStatus) {
-          listenStatus.textContent =
-            "listening...";
+        const btnListCtx =
+          document.getElementById("btnListCtx");
+        if (btnListCtx) {
+          btnListCtx.onclick = safe(() => {
+            if (
+              typeof NexTalk === "undefined" ||
+              !NexTalk.context ||
+              typeof NexTalk.context.list !==
+                "function"
+            ) {
+              return log(
+                "[context.list]",
+                "not available"
+              );
+            }
+            const result = call(NexTalk.context.list);
+            if (result && result.error) {
+              return log("[context.list]", result.error);
+            }
+            log("[context.list]", "contexts:", result);
+          });
         }
 
-        btnListen.textContent =
-          "Stop listening";
+        const btnAddMember =
+          document.getElementById("btnAddMember");
+        if (btnAddMember) {
+          btnAddMember.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const ctxPeerInput =
+              document.getElementById("ctxPeer");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            const peerId = ctxPeerInput
+              ? ctxPeerInput.value.trim()
+              : "";
+            if (!ctxId || !peerId) {
+              return log(
+                "[context.addMember]",
+                "need context_id and peer_id"
+              );
+            }
+            if (
+              typeof NexTalk.context.addMember !==
+                "function"
+            ) {
+              return log(
+                "[context.addMember]",
+                "not available"
+              );
+            }
+            const result = call(
+              NexTalk.context.addMember,
+              ctxId,
+              peerId
+            );
+            if (result && result.error) {
+              return log("[context.addMember]", result.error);
+            }
+            log(
+              "[context.addMember]",
+              "added",
+              peerId,
+              "to",
+              ctxId
+            );
+          });
+        }
 
-        log(
-          "[listen] started"
-        );
+        const btnExclude =
+          document.getElementById("btnExclude");
+        if (btnExclude) {
+          btnExclude.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const ctxPeerInput =
+              document.getElementById("ctxPeer");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            const peerId = ctxPeerInput
+              ? ctxPeerInput.value.trim()
+              : "";
+            if (!ctxId || !peerId) {
+              return log(
+                "[context.excludeMember]",
+                "need context_id and peer_id"
+              );
+            }
+            const result = call(
+              NexTalk.context.excludeMember,
+              ctxId,
+              peerId
+            );
+            if (result && result.error) {
+              return log("[context.excludeMember]", result.error);
+            }
+            log(
+              "[context.excludeMember]",
+              "excluded",
+              peerId,
+              "from",
+              ctxId
+            );
+          });
+        }
 
-        pollListen();
-      });
-    }
+        const btnInclude =
+          document.getElementById("btnInclude");
+        if (btnInclude) {
+          btnInclude.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const ctxPeerInput =
+              document.getElementById("ctxPeer");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            const peerId = ctxPeerInput
+              ? ctxPeerInput.value.trim()
+              : "";
+            if (!ctxId || !peerId) {
+              return log(
+                "[context.includeMember]",
+                "need context_id and peer_id"
+              );
+            }
+            const result = call(
+              NexTalk.context.includeMember,
+              ctxId,
+              peerId
+            );
+            if (result && result.error) {
+              return log("[context.includeMember]", result.error);
+            }
+            log(
+              "[context.includeMember]",
+              "included",
+              peerId,
+              "in",
+              ctxId
+            );
+          });
+        }
+
+        const btnListMembers =
+          document.getElementById("btnListMembers");
+        if (btnListMembers) {
+          btnListMembers.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            if (!ctxId) {
+              return log(
+                "[context.listMembers]",
+                "need context_id"
+              );
+            }
+            const result = call(
+              NexTalk.context.listMembers,
+              ctxId
+            );
+            if (result && result.error) {
+              return log("[context.listMembers]", result.error);
+            }
+            log("[context.listMembers]", "members:", result);
+          });
+        }
+
+        const btnGetEffective =
+          document.getElementById("btnGetEffective");
+        if (btnGetEffective) {
+          btnGetEffective.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            if (!ctxId) {
+              return log(
+                "[context.getEffectiveRecipients]",
+                "need context_id"
+              );
+            }
+            const result = call(
+              NexTalk.context.getEffectiveRecipients,
+              ctxId
+            );
+            if (result && result.error) {
+              return log("[context.getEffectiveRecipients]", result.error);
+            }
+            log(
+              "[context.getEffectiveRecipients]",
+              "effective:",
+              result
+            );
+          });
+        }
+
+        const btnSendMulti =
+          document.getElementById("btnSendMulti");
+        if (btnSendMulti) {
+          btnSendMulti.onclick = safe(() => {
+            const ctxIdInput =
+              document.getElementById("ctxId");
+            const msgInput =
+              document.getElementById("ctxMsg");
+            const ctxId = ctxIdInput
+              ? ctxIdInput.value.trim()
+              : "";
+            const msg = msgInput
+              ? msgInput.value
+              : "";
+            if (!ctxId || !msg) {
+              return log(
+                "[context.sendMulti]",
+                "need context_id and message"
+              );
+            }
+            const result = call(
+              NexTalk.context.sendMulti,
+              ctxId,
+              msg
+            );
+            if (result && result.error) {
+              return log("[context.sendMulti]", result.error);
+            }
+            log(
+              "[context.sendMulti]",
+              "message_id:",
+              result.message_id,
+              "sent:",
+              result.sent,
+              "pending:",
+              result.pending,
+              "failed:",
+              result.failed,
+              "deliveries:",
+              result.deliveries
+            );
+            if (msgInput) {
+              msgInput.value = "";
+            }
+          });
+        }
 
     /*
      * UI initialization completed.
