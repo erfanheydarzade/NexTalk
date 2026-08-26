@@ -86,7 +86,8 @@ func jsImportIdentity(this js.Value, args []js.Value) any {
 	loaded.relayConn = nil
 	loaded.relayKind = ""
 	loaded.ActiveClient = client.NewClientFromKeys(loaded.Id, loaded.IdentityPrivate, loaded.IdentityPublic, loaded.DilithiumPrivate, loaded.DilithiumPublic, loaded.Sessions)
-	*st = loaded
+
+	replaceIdentityLocked(&loaded)
 
 	return ok(map[string]any{"id": st.Id})
 }

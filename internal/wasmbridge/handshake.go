@@ -6,9 +6,10 @@
 package wasmbridge
 
 import (
-	"encoding/json"
 	"fmt"
 	"syscall/js"
+
+	"github.com/erfanheydarzade/NexTalk/core"
 )
 
 // jsCreateOffer(peerId) -> { offer: base64(json) }
@@ -76,18 +77,16 @@ func jsFinishHandshake(this js.Value, args []js.Value) any {
 		return fail(fmt.Errorf("decode answer: %w", err))
 	}
 
-	var hdr struct {
-		SenderId string `json:"senderId"`
-	}
-	if err := json.Unmarshal(answerBytes, &hdr); err != nil {
-		return fail(fmt.Errorf("unmarshal answer header: %w", err))
+	senderID, err := core.PeekAnswerSenderID(answerBytes)
+	if err != nil {
+		return fail(fmt.Errorf("peek answer header: %w", err))
 	}
 
-	peer, okp := st.Sessions["pending_"+hdr.SenderId]
+	peer, okp := st.Sessions["pending_"+senderID]
 	if !okp {
 		peer, okp = st.Sessions["pending"]
 		if !okp {
-			return failStr("no pending session found for " + hdr.SenderId)
+			return failStr("no pending session found for " + senderID)
 		}
 	}
 
