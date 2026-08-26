@@ -32,7 +32,7 @@ cmd/
   
 core/               → Protocol engine: handshake orchestration, session management
 crypto/             → Cryptographic primitives: keys, ratchet, AEAD, HKDF
-client/             → Peer identity state + persistent session storage (JSON files)
+client/             → Peer identity state + persistent session storage (<id>.json; see docs/serialization.md for why)
 
 transport/          → Raw relay adapters: Cloudflare KV (worker.go), S3 (proxy.go)
 
@@ -61,8 +61,8 @@ Each layer has a well-defined trust boundary:
 | `cmd`       | Orchestration only — no cryptographic decisions          |
 
 The transport layer never sees plaintext. It only routes opaque, already-encrypted
-bytes — how those bytes are framed (JSON vs. a raw type-byte prefix) differs
-per transport; see [Wire Formats](#wire-formats) below.
+bytes — how those bytes are framed (nanopack payloads vs. per-transport
+envelopes) differs per transport; see [Wire Formats](#wire-formats) below.
 
 ---
 
@@ -126,34 +126,57 @@ Each message is encrypted with **XChaCha20-Poly1305**:
 
 ---
 
+## Serialization
+
+All protocol payloads (handshakes, encrypted frames, group deliveries) and all
+local stores (contacts, mailbox, contexts, policies, deliveries) are
+[nanopack](https://github.com/erfanheydarzade/nanopack) binary — compact,
+CRC-framed, reflection-free. JSON survives only at deliberate boundaries:
+`--format json` scripting output, the offline paste envelope, `<id>.json`
+identity files, and the browser bridge. Full policy, format tables, and the
+schema-ID registry: [docs/serialization.md](docs/serialization.md).
+
+Legacy JSON stores (`contacts.json`, `<id>.mailbox.json`, `<id>.contexts.json`,
+`<id>.policies.json`, `<id>.deliveries.json`) are migrated transparently on
+first load — read once, re-persisted as `.np`, never deleted.
+
+---
+
 ## Wire Formats
 
-Handshake payloads (offer/answer) are JSON `core.HandShakeOffer`/`HandShakeAnswer`
-structs; encrypted message frames are always binary
-[nanopack](https://github.com/erfanheydarzade/nanopack) `crypto.SecureMessage`
-payloads. How those payloads get framed for transport differs per backend —
-see below.
+All protocol payloads are binary [nanopack](https://github.com/erfanheydarzade/nanopack)
+— the compact, reflection-free serialization library (1-byte field IDs, varint
+lengths, CRC-framed envelopes):
+
+- **Handshake payloads** — `core.HandShakeOffer` / `HandShakeAnswer` are
+  nanopack-encoded (schema IDs 20/21). Receivers still accept the legacy JSON
+  encoding from older builds: a payload starting with `{` is parsed as JSON,
+  everything else as nanopack. What we *send* is always nanopack.
+- **Encrypted message frames** — `crypto.SecureMessage` nanopack payloads.
+
+How payloads get framed for transport differs per backend — see below.
 
 ### Transport envelopes
 
 There is no single wire envelope shared by every transport — each one frames
-the same three payload kinds (offer / answer / message) differently. `finish`
-is never one of them: it's a local action name for processing a received
-*answer*, not something that travels on the wire.
+the same payload kinds differently. `finish` is never one of them: it's a local
+action name for processing a received *answer*, not something that travels on
+the wire.
 
-- **Offline mode** (copy/paste) — JSON, but the `Envelope{Type, Data}` struct
-  carries no `json:` tags, so the real keys are capitalized and `Data` is a
-  base64 **string**, not a nested object:
+- **Offline mode** (copy/paste) — the paste-safe container is a small JSON
+  envelope whose `Data` field carries the **base64 of the nanopack payload**:
   ```json
-  { "Type": "offer", "Data": "base64..." }
+  { "Type": "offer", "Data": "base64-of-nanopack..." }
   ```
-  (`cmd/offline/models.go`)
+  JSON stays here deliberately: this boundary exists for humans pasting text
+  across air gaps, and base64-in-JSON is what survives terminals and QR codes.
+  (`cmd/offline/models.go`, `cmd/offline/offline.go`)
 
-- **Worker transport** (Cloudflare relay) — not JSON at all: a single raw
-  type byte prefixed onto the payload, `0x01`/`0x02`/`0x03` for
-  offer/answer/message:
+- **Worker transport** (Cloudflare relay) — a single raw type byte prefixed
+  onto the payload, `0x01`/`0x02`/`0x03`/`0x04` for offer/answer/message/
+  multi-message:
   ```
-  [type byte][raw payload bytes]
+  [type byte][raw nanopack payload bytes]
   ```
   built by `relay.WrapEnvelope` / read back by `relay.worker.UnwrapEnvelope`,
   and shared by the CLI's `worker` transport and the wasm bridge.
@@ -279,7 +302,7 @@ to stdout: `json.Marshal(Envelope{Type: "offer", Data: offerBytes})`, where
 `Envelope` has no `json:` tags (capitalized keys) and `Data` is the raw offer
 bytes, base64-encoded by `encoding/json`'s `[]byte` handling:
 ```json
-{"Type":"offer","Data":"<base64 of the core.HandShakeOffer JSON>"}
+{"Type":"offer","Data":"<base64 of the nanopack HandShakeOffer payload>"}
 ```
 
 **Output (`--format json`)** — wraps that same encoded envelope string in an
@@ -318,7 +341,7 @@ Offer can also be piped via stdin (omit `-e` and `-f`). Verifies both signatures
 **Output (no `-o`, default `--out raw`)** — same untagged `Envelope` shape as
 `offer`, type `"answer"`:
 ```json
-{"Type":"answer","Data":"<base64 of the core.HandShakeAnswer JSON>"}
+{"Type":"answer","Data":"<base64 of the nanopack HandShakeAnswer payload>"}
 ```
 
 **Output (`--format json`)** wraps it in an `AcceptResponse{Envelope, Encoding}`:
@@ -595,15 +618,39 @@ nextalk worker connect -i <YOUR_ID> -r <PEER_ID>
 
 Poll the relay inbox and process all pending events: automatically answers incoming handshake offers and delivers decrypted messages.
 
+Every decrypted `message` (and `group_message`) is **persisted to the identity's mailbox file** (`<id>.mailbox.json`), so what you see in the notification stays readable later via `nextalk worker mailbox` or the interactive shell — even from a different process.
+
 ```bash
 nextalk worker listen -i <YOUR_ID>
 nextalk worker listen -i <YOUR_ID> --format json
 ```
 
-Top-level event `type` values: `offer`, `answer`, `message`, `error`. `offer`
-and `answer` events also carry an `actions` array recording what `listen` did
-automatically in response — `answer_sent` after auto-accepting an offer,
-`session_established` after auto-finishing on a received answer.
+Top-level event `type` values: `offer`, `answer`, `message`, `group_message`,
+`error`. `offer` and `answer` events also carry an `actions` array recording
+what `listen` did automatically in response — `answer_sent` after
+auto-accepting an offer, `session_established` after auto-finishing on a
+received answer. A `group_message` event additionally carries a `context`
+field naming the group thread it was filed under.
+
+### `worker mailbox`
+
+Read the persistent conversations for an identity — the counterpart of `worker listen`.
+
+```bash
+# List all conversations with unread counts (DMs + groups)
+nextalk worker mailbox -i <YOUR_ID>
+
+# Read one peer's thread and mark it read
+nextalk worker mailbox -i <YOUR_ID> <PEER_ID>
+
+# Read a group by display name or context ID
+nextalk worker mailbox -i <YOUR_ID> "Design Crew"
+nextalk worker mailbox -i <YOUR_ID> --format json
+```
+
+Messages land here automatically: `worker listen` stores everything it
+decrypts, and the interactive shell shares exactly the same files, so
+history survives shell restarts and works across CLI and shell interchangeably.
 
 ### `worker encrypt`
 
@@ -627,6 +674,59 @@ nextalk worker encrypt -i <YOUR_ID> -r <PEER_ID> -m "hello" --out hex
 
 If neither `--message` nor `--file` is given, plaintext is read from stdin.
 
+### `worker context`
+
+Full group (multi-message context) management from the CLI — same semantics as the shell's `context` command, operating on the identity's persisted stores.
+
+```bash
+nextalk worker context -i <YOUR_ID> create "Design Crew"
+nextalk worker context -i <YOUR_ID> add <CTX_ID> <PEER_ID>
+nextalk worker context -i <YOUR_ID> show <CTX_ID>
+nextalk worker context -i <YOUR_ID> rename <CTX_ID> "New Name"
+nextalk worker context -i <YOUR_ID> mute <CTX_ID> <PEER_ID>   # also: exclude/remove/include/block
+nextalk worker context -i <YOUR_ID> members <CTX_ID>
+nextalk worker context -i <YOUR_ID> list
+```
+
+### `worker send-multi` / `worker contexts`
+
+Fan a message out to every enabled member of a context through their independent 1:1 channels, and quickly list contexts.
+
+```bash
+nextalk worker send-multi -i <YOUR_ID> -c <CTX_ID_OR_NAME> -m "standup at 10"
+nextalk worker send-multi -i <YOUR_ID> -c "Design Crew" -f body.txt --format json
+nextalk worker contexts   -i <YOUR_ID>
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--id` | `-i` | Your local peer ID (required) |
+| `--context` | `-c` | Target context ID **or display name** (required) |
+| `--message` | `-m` | Inline plaintext |
+| `--file` | `-f` | Path to plaintext input file |
+| `--in` | | Input encoding: `raw`, `b64`, `hex` (default: raw) |
+| `--format` | | `human` or `json` |
+
+The outgoing message is recorded in the group thread of `<id>.mailbox.json`,
+and per-recipient delivery status is reported (`sent` / `pending (no session
+yet)` / `failed`). Recipients receive it as a normal `group_message` on their
+next `listen`.
+
+### Shell completion
+
+Every worker subcommand supports cobra's dynamic completion — enable it once per shell with:
+
+```bash
+source <(nextalk completion bash)   # also: zsh, fish, powershell
+```
+
+Then Tab offers:
+
+- `-i/--id` → local identities found in the working directory
+- `-r/--remotePeer` → established sessions + contact aliases
+- `-c/--context` / positional context slots → context IDs and display names
+- `worker mailbox` positionals → peers **and** groups
+
 ### Scripted worker handshake
 
 ```bash
@@ -638,6 +738,18 @@ nextalk worker listen  -i "$BOB"              # auto-answers offer
 nextalk worker listen  -i "$ALICE"            # finalises session
 nextalk worker encrypt -i "$ALICE" -r "$BOB" -m "hello"
 nextalk worker listen  -i "$BOB" --format json
+```
+
+### Scripted group chat
+
+```bash
+CREW=$(nextalk worker context  -i "$ALICE" create "Design Crew" | awk '{print $1}')
+nextalk worker context  -i "$ALICE" add "$CREW" "$BOB"
+nextalk worker send-multi -i "$ALICE" -c "$CREW" -m "hello group"
+
+# Bob hears it as a group_message event, filed under "Design Crew":
+nextalk worker listen  -i "$BOB"
+nextalk worker mailbox -i "$BOB" "Design Crew"     # read the thread
 ```
 
 ---
@@ -674,6 +786,12 @@ After selecting a transport, you enter a persistent shell:
 
 ### Worker Mode Commands
 
+The group-chat commands below (`context`, `send-multi`, `contexts`, `mailbox`)
+are **not worker-specific** — they are the shared standard surface, available
+identically in Offline Mode's shell and CLI (where send-multi exports
+per-recipient transfer containers instead of transmitting) and in Proxy Mode.
+See [docs/framing.md](docs/framing.md).
+
 | Command | Description |
 |---------|-------------|
 | `init` | Generate a new identity and register with the Cloudflare relay |
@@ -681,8 +799,8 @@ After selecting a transport, you enter a persistent shell:
 | `connect <peer_id>` | Send a handshake offer to a peer via the relay |
 | `listen` | Poll the relay inbox and automatically process offers/answers/messages |
 | `send <peer_id> <msg>` | Encrypt a message and dispatch it to the relay |
-| `mailbox` | List all active peer chats and contexts with unread indicators |
-| `mailbox <peer_id>` | Read messages from a specific peer |
+| `mailbox` | List all peer chats and group threads with unread indicators |
+| `mailbox <peer\|group>` | Read one thread (by peer ID, group name, or context ID) — marks it read |
 | `context create <name>` | Create a new message context |
 | `context list` | List all contexts |
 | `context show <ctx>` | Show context details and members |
@@ -702,6 +820,11 @@ The `listen` command handles the full handshake automatically:
 - Incoming **offer** → auto-accept and send answer
 - Incoming **answer** → auto-finish and activate session
 - Incoming **message** → decrypt and store in mailbox
+- Incoming **group message** (0x04) → verify binding, adopt group metadata, store in the group thread
+
+Conversations, groups, and policies persist per identity (`<id>.mailbox.json`,
+`<id>.contexts.json`, `<id>.policies.json`) and are shared between the shell
+and the one-shot CLI commands.
 
 ### Offline Mode Commands
 
@@ -945,7 +1068,7 @@ DEBUG=true
 - **Not production-audited** — research and experimentation only
 - `internal/relay/proxy.Adapter.Send` doesn't satisfy the `relay.Relay` interface yet, so the proxy transport can't be used polymorphically the way the worker transport now can (CLI and wasm alike)
 - No multi-device identity synchronization
-- No persistent mailbox indexing per peer (in-memory only during shell session)
+- Mailbox/context files are last-writer-wins per process — running two writers against the same identity simultaneously can drop one side's writes (same trade-off as `<id>.json` session state)
 - Transport-layer replay hardening is incomplete
 - No formal protocol specification
 - Session inspection tooling in shell is minimal
@@ -954,10 +1077,9 @@ Planned:
 - Formal protocol spec (RFC-style)
 - Structured event tracing for envelope debugging
 - Multi-device key sync design
-- Persistent peer mailbox indexing
+- Server-side message ACKs / delivery receipts
 
 ---
-
 ## Design Philosophy
 
 NexTalk cleanly separates four concerns:

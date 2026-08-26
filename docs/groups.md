@@ -158,6 +158,27 @@ This canonical serialization ensures that:
 - A delivery from `Context A` cannot be transplanted into `Context B`
 - The plaintext is wrapped with AAD before encryption, and verified after decryption
 
+### Wire Format (wrapped payload)
+
+The bytes encrypted inside each 1:1 session ("the wrapped payload") exist in
+two formats, disambiguated by the leading byte:
+
+```
+v1 (legacy):  AAD || plaintext
+v2 (current): 0x02 || AAD || len(ctxDescriptor)||ctxDescriptor || plaintext
+```
+
+- **v1** — older senders; recipients can still parse the binding but learn
+  nothing about group metadata beyond the raw context ID.
+- **v2** — embeds the creator-signed `MessageContext` descriptor so every
+  recipient learns the group's display name and creator directly from the
+  message, with no out-of-band metadata exchange. The descriptor signature is
+  verified against the Ed25519 public key embedded in `CreatorID`'s peer ID;
+  forged or renamed groups are rejected on arrival.
+
+Legacy payloads never start with `0x02` (their first byte is
+`len(msgID) = 32` for hex-encoded IDs), so the two formats cannot be confused.
+
 ### No Shared Group State
 
 ```
@@ -292,13 +313,19 @@ A failed recipient delivery is independently retryable:
 
 ## Persistence
 
-### JSON-Backed Stores
+### File-Backed Stores (nanopack)
 
-`JSONContextStore` and `JSONDeliveryStore` provide file-based persistence:
+`FileContextStore` and `FileDeliveryStore` persist contexts, policies and
+deliveries as CRC-framed nanopack record files (via `internal/binstore`):
 
 ```go
-store, err := NewJSONContextStore("contexts.json", "policies.json")
+store, err := NewFileContextStore("<id>.contexts.json", "<id>.policies.json")
+// data actually lives at <id>.contexts.np / <id>.policies.np
 ```
+
+Constructors take the historical `.json` paths for compatibility; records are
+written to the sibling `.np` files and the legacy layout is read once for a
+transparent one-time migration. Legacy files are never deleted automatically.
 
 ### Limitations
 
@@ -343,9 +370,9 @@ Local policies (mute, block, exclude) are purely local. They do not:
 - Modify global context metadata
 - Prevent other users from including the same recipient
 
-### JSON Persistence
+### Persistence Notes
 
-The JSON-backed stores are intended for local/reference use. They are not production-grade durable storage. Limitations:
+The file-backed nanopack stores are intended for local/reference use. They are not production-grade durable storage. Limitations:
 - No write-ahead logging
 - No fsync guarantees
 - No multi-writer concurrency control
@@ -410,16 +437,43 @@ send-multi <ctx_id> "Hello everyone"
 
 ### Shell Tab Completion
 
-Context IDs and display names are **Tab-completable** in argument slots:
+Context IDs, display names, peers, local identities, and mailbox threads are
+**Tab-completable**. The `context` command has slot-aware completion:
 
-| Command | Completes |
+| Line | Completes |
 |---------|-----------|
+| `context <Tab>` | Subcommand words (`create`, `show`, `add`, …) |
 | `send-multi <Tab>` | All context IDs and display names |
-| `context show <Tab>` | All context IDs and display names |
-| `context add <ctx> <Tab>` | Peer IDs |
-| `context exclude <ctx> <Tab>` | Peer IDs |
+| `context show <Tab>` / `context members <Tab>` | Context IDs and display names |
+| `context add <ctx> <Tab>` | Peer IDs and contact aliases |
+| `mailbox <Tab>` | Peers plus group names/IDs |
 
-A context becomes completable the moment it is created via `context create`.
+A context becomes completable the moment it is created via `context create`
+(or received from a peer's signed metadata).
+
+### One-shot CLI
+
+The same operations exist as cobra subcommands under `nextalk worker`,
+sharing the persisted stores with the shell:
+
+```bash
+nextalk worker context  -i <ID> create|list|show|rename|add|exclude|remove|include|mute|block|members ...
+nextalk worker send-multi -i <ID> -c <CTX_OR_NAME> -m "text"
+nextalk worker contexts -i <ID>
+```
+
+Cobra shell completion (`nextalk completion bash`) offers identities for
+`-i`, sessions/contacts for `-r`, and contexts/peers for their slots.
+
+### WASM (browser)
+
+`NexTalk.context.*` exposes the full management surface — createContext,
+list, show, rename, addMember/excludeMember/includeMember/muteMember/
+blockMember/removeMember, listMembers, sendMulti, getEffectiveRecipients,
+drop — and `NexTalk.relay.listen()` dispatches incoming multi-message
+deliveries into `group_message` events with the creator-signed display name
+attached, so a web client chats with groups exactly like it does with
+single peers. See docs/wasm.md for the complete API.
 
 ### Worker Mode Integration
 
@@ -429,9 +483,18 @@ Worker mode supports **real multi-message delivery** through the relay:
 2. Add recipients: `context add <ctx> <peer>`
 3. Send multi-message: `send-multi <ctx> "Hello team"`
 
-The `listen` command processes incoming multi-message deliveries (type `0x04`).
+The `listen` command processes incoming multi-message deliveries (type
+`0x04`): it decrypts the delivery over the 1:1 session, parses the embedded
+binding (message ID, context, sender, recipient), verifies it was not
+transplanted, adopts the creator-signed context metadata (so recipients learn
+the group name without an out-of-band channel), dedupes redeliveries, and
+files the message into a persistent group thread.
 
-The `mailbox` command shows both regular 1:1 chats and context conversations.
+The `mailbox` command shows both regular 1:1 chats and group threads with
+unread counts. Reading a thread (`mailbox <peer>` or `mailbox "Team"`) marks
+it read. Everything is persisted per identity in `<id>.mailbox.json`,
+`<id>.contexts.json`, and `<id>.policies.json`, shared between the shell and
+the one-shot CLI commands (`worker listen`, `worker mailbox`).
 
 ### Offline Mode Integration
 
