@@ -170,18 +170,17 @@ func (c *Client) AcceptOffer(offerBytes []byte) ([]byte, error) {
 // Returns the peer's canonical ID.
 func (c *Client) FinishHandshake(answerBytes []byte) (string, error) {
 	// Peek at the sender ID so we can locate the right pending peer.
-	var hdr struct {
-		SenderId string `json:"senderId"`
-	}
-	if err := json.Unmarshal(answerBytes, &hdr); err != nil {
-		return "", fmt.Errorf("unmarshal answer header: %w", err)
+	// Works for both wire encodings (nanopack current, legacy JSON).
+	hdr, err := core.PeekAnswerSenderID(answerBytes)
+	if err != nil {
+		return "", fmt.Errorf("peek answer header: %w", err)
 	}
 
-	peer, ok := c.Sessions["pending_"+hdr.SenderId]
+	peer, ok := c.Sessions["pending_"+hdr]
 	if !ok {
 		peer, ok = c.Sessions["pending"]
 		if !ok {
-			return "", fmt.Errorf("no pending session found for %s", hdr.SenderId)
+			return "", fmt.Errorf("no pending session found for %s", hdr)
 		}
 	}
 

@@ -13,11 +13,11 @@ package core
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber768"
 	"github.com/erfanheydarzade/NexTalk/crypto"
+	"github.com/erfanheydarzade/nanopack"
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/ed25519"
 )
@@ -76,14 +76,14 @@ func (e *Engine) newPeer(
 //   - peer: the ephemeral session state; the caller MUST store this as
 //     sessions["pending_<peerId>"] (and sessions["pending"]) before the
 //     answer arrives, so FinishHandshake can retrieve it.
-//   - offerJSON: the wire bytes to forward to the peer.
+//   - offerWire: the wire bytes to forward to the peer (nanopack binary).
 func (e *Engine) CreateOffer(
 	myId string,
 	idPriv ed25519.PrivateKey,
 	idPub ed25519.PublicKey,
 	dilPriv, dilPub []byte,
 	peerId string,
-) (peer *crypto.SecurePeer, offerJSON []byte, err error) {
+) (peer *crypto.SecurePeer, offerWire []byte, err error) {
 	peer, err = e.newPeer(nil, idPriv, idPub, dilPriv, dilPub)
 	if err != nil {
 		return nil, nil, err
@@ -108,8 +108,8 @@ func (e *Engine) CreateOffer(
 		DilithiumSign: peer.GetDilithiumSign(offerId, peerIdBytes),
 	}
 
-	offerJSON, err = json.Marshal(offer)
-	return peer, offerJSON, err
+	offerWire, err = nanopack.MarshalFastID(&offer)
+	return peer, offerWire, err
 }
 
 // ── Step 2 ───────────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ func (e *Engine) CreateOffer(
 // Returns:
 //   - senderID: the initiator's peer ID; the caller stores peer under this key.
 //   - peer:     the fully initialised responder session.
-//   - answerJSON: the wire bytes to send back to the initiator.
+//   - answerWire: the wire bytes to send back to the initiator (nanopack binary).
 func (e *Engine) AcceptOffer(
 	myId string,
 	idPriv ed25519.PrivateKey,
@@ -132,9 +132,9 @@ func (e *Engine) AcceptOffer(
 	dilPriv, dilPub []byte,
 	existingSessions map[string]*crypto.SecurePeer,
 	offerBytes []byte,
-) (senderID string, peer *crypto.SecurePeer, answerJSON []byte, err error) {
-	var offer HandShakeOffer
-	if err = json.Unmarshal(offerBytes, &offer); err != nil {
+) (senderID string, peer *crypto.SecurePeer, answerWire []byte, err error) {
+	offer, err := decodeOffer(offerBytes)
+	if err != nil {
 		return "", nil, nil, fmt.Errorf("unmarshal offer: %w", err)
 	}
 	if len(offer.OfferID) == 0 {
@@ -210,8 +210,8 @@ func (e *Engine) AcceptOffer(
 		RecipientId:     myIdBytes,
 	}
 
-	answerJSON, err = json.Marshal(answer)
-	return offer.SenderId, responderPeer, answerJSON, err
+	answerWire, err = nanopack.MarshalFastID(&answer)
+	return offer.SenderId, responderPeer, answerWire, err
 }
 
 // ── Step 3 ───────────────────────────────────────────────────────────────────
@@ -231,8 +231,8 @@ func (e *Engine) FinishHandshake(
 	pendingPeer *crypto.SecurePeer,
 	answerBytes []byte,
 ) (peerID string, err error) {
-	var answer HandShakeAnswer
-	if err = json.Unmarshal(answerBytes, &answer); err != nil {
+	answer, err := decodeAnswer(answerBytes)
+	if err != nil {
 		return "", fmt.Errorf("unmarshal answer: %w", err)
 	}
 	if len(answer.KyberCiphertext) == 0 {
