@@ -3,6 +3,7 @@ package offline
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/spf13/cobra"
 )
 
@@ -92,6 +94,35 @@ func RunDecrypt(opts DecryptOptions) error {
 	input, err := readInput(opts.CipherText, opts.InputFile)
 	if err != nil {
 		return err
+	}
+
+	// Standard path first: a transfer container or framed payload (group
+	// deliveries land in the mailbox; plain messages too). Falls through to
+	// the legacy bare-ciphertext path when the input isn't framed.
+	if ev, ingErr := ingestStandardBytes(opts.LocalPeer, input); ingErr == nil {
+		switch {
+		case ev.Kind == "duplicate" && opts.Format == internal.FormatJSON:
+			return writeJSON(DecryptResponse{Sender: "", Encoding: "utf-8", Message: "duplicate ignored"})
+		case ev.Kind == "duplicate":
+			fmt.Println("[i] Already ingested — ignoring duplicate.")
+			return nil
+		case opts.Format == internal.FormatJSON:
+			return writeJSON(DecryptResponse{
+				Sender:   ev.Sender,
+				Encoding: "utf-8",
+				Message:  ev.Message,
+			})
+		case ev.Kind == "group_message":
+			fmt.Fprintf(os.Stderr, "[✓] Group message in [%s] from %s — stored in mailbox\n",
+				ev.Context, ev.Sender)
+			fmt.Printf("%s\n", ev.Message)
+		default:
+			fmt.Fprintf(os.Stderr, "[✓] Decrypted message from %s — stored in mailbox\n", ev.Sender)
+			fmt.Printf("%s\n", ev.Message)
+		}
+		return nil
+	} else if !errors.Is(ingErr, groupchat.ErrNotFrame) {
+		return fmt.Errorf("ingest failed: %w", ingErr)
 	}
 
 	input, err = codec.DecodeInput(opts.InputEncoding, input)
