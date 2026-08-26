@@ -10,14 +10,25 @@ package contacts
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+
+	"github.com/erfanheydarzade/NexTalk/internal/binstore"
+	"github.com/erfanheydarzade/nanopack"
 )
 
-// storeFile is the on-disk location of the global contacts book. It lives
-// alongside client profile files but, unlike "<id>.json", isn't named after
-// (or tied to) any particular peer identity.
-const storeFile = "contacts.json"
+// storeFile is the on-disk location of the global contacts book (nanopack
+// binary via internal/binstore). legacyFile is the pre-nanopack JSON path,
+// still READ for migration; new writes always go to storeFile.
+const (
+	storeFile  = "contacts.np"
+	legacyFile = "contacts.json"
+
+	// schemaID is this store's nanopack envelope schema ID. Permanent once
+	// shipped — see nanopack's wire-compatibility notes.
+	schemaID byte = 40
+)
 
 // Contact is a named alias for a peer's UserID.
 type Contact struct {
@@ -31,18 +42,64 @@ type Store struct {
 	Contacts map[string]Contact `json:"contacts"`
 }
 
-// Load reads the global contacts book from disk. If storeFile doesn't exist
-// yet (first run), it returns a ready, empty Store rather than an error —
-// callers don't need any "identity initialised" precondition to use it.
+// contactBin is the nanopack record shape of one Contact.
+//
+//nanopack:schema id=40
+type contactBin struct {
+	Name   string `bin:"1"`
+	UserID string `bin:"2"`
+	Note   string `bin:"3"`
+}
+
+func (c *contactBin) MarshalBinID(e *nanopack.Encoder) error {
+	e.AddID(1, []byte(c.Name))
+	e.AddID(2, []byte(c.UserID))
+	e.AddID(3, []byte(c.Note))
+	return nil
+}
+
+func (c *contactBin) UnmarshalBinID(fields []nanopack.FieldID) error {
+	for _, f := range fields {
+		switch f.ID {
+		case 1:
+			c.Name = string(f.Data)
+		case 2:
+			c.UserID = string(f.Data)
+		case 3:
+			c.Note = string(f.Data)
+		}
+	}
+	return nil
+}
+
+// Load reads the global contacts book from disk. If neither storeFile nor
+// the legacy JSON file exists yet (first run), it returns a ready, empty
+// Store rather than an error — callers don't need any "identity
+// initialised" precondition to use it.
 func Load() (*Store, error) {
-	data, err := os.ReadFile(storeFile)
+	if records, err := binstore.Load(storeFile, schemaID); err == nil {
+		s := &Store{Contacts: make(map[string]Contact, len(records))}
+		for _, rec := range records {
+			var cb contactBin
+			if nanopack.UnmarshalFastID(rec, &cb) != nil {
+				continue // skip corrupted entry rather than fail the load
+			}
+			s.Contacts[cb.Name] = Contact{Name: cb.Name, UserID: cb.UserID, Note: cb.Note}
+		}
+		return s, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read contacts store: %w", err)
+	}
+
+	// Legacy JSON migration: read old format, then persist in the new one
+	// so the migration happens exactly once.
+	data, err := os.ReadFile(legacyFile)
 	if os.IsNotExist(err) {
 		return &Store{Contacts: make(map[string]Contact)}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read contacts store: %w", err)
 	}
-
 	var s Store
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse contacts store: %w", err)
@@ -50,16 +107,24 @@ func Load() (*Store, error) {
 	if s.Contacts == nil {
 		s.Contacts = make(map[string]Contact)
 	}
+	if err := s.Save(); err != nil {
+		// Migration write failure is not fatal — keep the loaded state.
+		return &s, nil
+	}
 	return &s, nil
 }
 
 // Save persists the contacts book to storeFile with owner-only permissions.
 func (s *Store) Save() error {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serialize contacts store: %w", err)
+	records := make([][]byte, 0, len(s.Contacts))
+	for _, c := range s.Contacts {
+		rec, err := nanopack.MarshalFastID(&contactBin{Name: c.Name, UserID: c.UserID, Note: c.Note})
+		if err != nil {
+			return fmt.Errorf("serialize contacts store: %w", err)
+		}
+		records = append(records, rec)
 	}
-	if err := os.WriteFile(storeFile, data, 0600); err != nil {
+	if err := binstore.Save(storeFile, schemaID, records); err != nil {
 		return fmt.Errorf("write contacts store: %w", err)
 	}
 	return nil
