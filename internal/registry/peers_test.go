@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/erfanheydarzade/NexTalk/internal/mailbox"
 )
 
 func chdirTemp(t *testing.T) string {
@@ -50,10 +52,14 @@ func TestRememberPeerIgnoresPlaceholders(t *testing.T) {
 func TestPeerCandidatesUnionsSources(t *testing.T) {
 	chdirTemp(t)
 
-	s := &State{Mailbox: map[string][]ChatMessage{
-		"mailboxPeer": {{Body: "hi"}},
-		"pending":     {{Body: "should be filtered"}},
-	}}
+	st, err := mailbox.Load("testIdentity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendIncoming("mailboxPeer", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	s := &State{MailboxStore: st}
 	s.RememberPeer("connectedPeer")
 
 	want := []string{"connectedPeer", "mailboxPeer"} // sorted

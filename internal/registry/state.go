@@ -11,15 +11,10 @@ import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/mailbox"
 	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 )
-
-// ChatMessage is a single in-memory chat entry.
-type ChatMessage struct {
-	Body   string
-	IsRead bool
-}
 
 // State holds everything a GUITransport might need across commands within one
 // sub-shell session. Fields are intentionally exported so transports can read
@@ -36,25 +31,24 @@ type State struct {
 	// Worker is populated by WorkerTransport.Init; nil for other transports.
 	Worker relay.Relay
 
-	// Mailbox stores received messages keyed by sender peer ID, newest first.
-	Mailbox map[string][]ChatMessage
+	// MailboxStore persists conversations (<id>.mailbox.json) so messages
+	// survive shell restarts and are shared with one-shot CLI commands
+	// (`worker listen`, `worker mailbox`). It is bound to ActiveClient by
+	// InitMailbox; nil until an identity is initialised or loaded.
+	MailboxStore *mailbox.Store
 
 	// KnownPeers is the set of peer IDs this session has seen, from any
 	// direction: a peer we sent an offer to, a peer whose offer we accepted,
 	// a peer whose answer completed our handshake, or a peer who messaged us.
 	//
-	// It exists because Mailbox alone is not enough for Tab completion —
-	// Mailbox only gains a key once a *message* is exchanged, so a peer ID
-	// typed into `connect` (or received via `listen`) would otherwise have to
-	// be retyped in full for every later command. Peers are recorded via
+	// It exists because the mailbox alone is not enough for Tab completion —
+	// threads only appear once a *message* is exchanged, so a peer ID typed
+	// into `connect` (or received via `listen`) would otherwise have to be
+	// retyped in full for every later command. Peers are recorded via
 	// State.RememberPeer; see peers.go.
 	KnownPeers map[string]bool
 
-	// Contexts stores multi-message contexts (groups) for the active client.
-	// This is purely local state — it does not mutate any global context metadata.
-	Contexts map[string][]ChatMessage
-
-	// ContextStore provides persistence for multi-message contexts.
+	// ContextStore provides persistence for multi-message contexts (groups).
 	ContextStore multimsg.ContextStore
 
 	// DeliveryStore provides persistence for multi-message deliveries.
@@ -70,27 +64,75 @@ func NewState(api *core.Engine, cfg config.Config) *State {
 		API:           api,
 		Config:        cfg,
 		Ctx:           context.Background(),
-		Mailbox:       make(map[string][]ChatMessage),
 		KnownPeers:    make(map[string]bool),
-		Contexts:      make(map[string][]ChatMessage),
 		ContextStore:  multimsg.NewMemoryContextStore(),
 		DeliveryStore: multimsg.NewMemoryDeliveryStore(),
 	}
 }
 
+// InitMailbox binds the persistent mailbox store to the active client.
+// Call after init or load. When no identity is active it clears any stale
+// binding from a previously loaded identity.
+func (s *State) InitMailbox() {
+	if s.ActiveClient == nil {
+		s.MailboxStore = nil
+		return
+	}
+	st, err := mailbox.Load(s.ActiveClient.Id)
+	if err != nil {
+		// A corrupt mailbox file must never lock the user out of their keys;
+		// degrade to nil and let callers report "mailbox unavailable".
+		s.MailboxStore = nil
+		return
+	}
+	s.MailboxStore = st
+}
+
 // InitFanout initializes the multi-message fanout for the active client.
 // Call this after init or load to enable multi-message commands.
+//
+// Contexts, policies and deliveries are persisted per identity
+// (<id>.contexts.json / <id>.policies.json / <id>.deliveries.json) so groups
+// created in one session survive restarts. Memory stores remain the fallback
+// for identities without a writable working directory (wasm).
 func (s *State) InitFanout() {
 	if s.ActiveClient == nil {
 		return
 	}
-	s.ContextStore = multimsg.NewMemoryContextStore()
-	s.DeliveryStore = multimsg.NewMemoryDeliveryStore()
+	ctxStore, deliveryStore, err := multimsg.OpenIdentityStores(s.ActiveClient.Id)
+	if err != nil {
+		// A missing/unreadable store must never lock the user out; fall back
+		// to in-memory (also covers sandboxed targets like wasm).
+		ctxStore = multimsg.NewMemoryContextStore()
+		deliveryStore = multimsg.NewMemoryDeliveryStore()
+	}
+	s.ContextStore = ctxStore
+	s.DeliveryStore = deliveryStore
 	s.Fanout = multimsg.NewFanout(s.ActiveClient, s.Worker, s.ContextStore, s.DeliveryStore, multimsg.DefaultFanoutConfig())
 }
 
+// ThreadCandidates returns everything `mailbox` accepts: peer IDs/aliases
+// plus every group thread's display name and context ID.
+func (s *State) ThreadCandidates() []string {
+	set := make(map[string]bool)
+	for _, p := range s.PeerCandidates() {
+		set[p] = true
+	}
+	if s.MailboxStore != nil {
+		for _, t := range s.MailboxStore.List() {
+			if mailbox.IsGroupKey(t.Key) {
+				set[t.Key] = true
+				if t.Title != "" {
+					set[t.Title] = true
+				}
+			}
+		}
+	}
+	return sortedKeys(set)
+}
+
 // ContextCandidates returns the context IDs that `context` subcommands accept.
-// These come from the in-memory ContextStore populated during the session.
+// These come from the ContextStore populated during the session.
 func (s *State) ContextCandidates() []string {
 	if s.Fanout == nil || s.Fanout.CtxStore == nil {
 		return nil
