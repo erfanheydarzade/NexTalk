@@ -81,10 +81,20 @@ func (c *shellCompleter) Do(line []rune, pos int) ([][]rune, int) {
 
 	argIndex := len(typed) - 1 // typed[0] is always the command word.
 
+	// Commands with a custom completer decide their own candidates —
+	// their slots depend on the words already typed, not just positions.
+	// argIndex keeps the same convention as ArgKindAt: 0-based over the
+	// arguments AFTER the command word.
+	if spec.Complete != nil {
+		return suffixes(spec.Complete(c.state, typed[1:], argIndex, fragment), fragment),
+			utf8.RuneCountInString(fragment)
+	}
+
 	slotCandidates := map[registry.ArgKind][]string{
 		registry.ArgPeer:     c.state.PeerCandidates(),
 		registry.ArgIdentity: c.state.IdentityCandidates(),
 		registry.ArgContext:  c.state.ContextCandidates(),
+		registry.ArgThread:   c.state.ThreadCandidates(),
 	}
 	candidates, ok := slotCandidates[spec.ArgKindAt(argIndex)]
 	if !ok { // registry.ArgText — free-form, no completion.

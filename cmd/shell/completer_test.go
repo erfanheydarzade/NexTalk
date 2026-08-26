@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
 )
 
@@ -29,6 +30,7 @@ func (f *fakeTransport) Commands() []registry.CommandSpec {
 		{Name: "listen"},
 		registry.MessageCommand("send", "encrypt"),
 		{Name: "mailbox", Args: []registry.ArgKind{registry.ArgPeer}},
+		groupchat.ContextCommandSpec(),
 	}, registry.BaseCommands()...)
 }
 
@@ -107,8 +109,8 @@ func TestCompletePeerAfterConnect(t *testing.T) {
 	state := &registry.State{}
 	state.RememberPeer(peerID) // what the connect handler now does
 
-	if len(state.Mailbox) != 0 {
-		t.Fatal("precondition failed: Mailbox should still be empty")
+	if state.MailboxStore != nil {
+		t.Fatal("precondition failed: MailboxStore should still be unset")
 	}
 
 	c := newTestCompleter(state)
