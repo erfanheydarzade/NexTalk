@@ -2,6 +2,7 @@ package internal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -20,6 +21,30 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// reportedError marks an error whose message has ALREADY been rendered to
+// the user (stderr in human mode, JSON in json mode). main.go uses this to
+// avoid double-printing while still exiting non-zero — and to print errors
+// that reach it unreported (e.g. cobra's "required flag(s) missing"), which
+// would otherwise fail silently with exit code 1 and no explanation.
+type reportedError struct{ err error }
+
+func (e reportedError) Error() string { return e.err.Error() }
+func (e reportedError) Unwrap() error { return e.err }
+
+// IsReported reports whether err was already shown to the user.
+func IsReported(err error) bool {
+	var r reportedError
+	return errors.As(err, &r)
+}
+
+// WrapReported marks err as already-reported without printing anything.
+func WrapReported(err error) error {
+	if err == nil || IsReported(err) {
+		return err
+	}
+	return reportedError{err}
+}
+
 // ReportAndExit is the single place that turns a RunEncrypt/RunDecrypt error
 // into user/consumer-facing output and a process exit code. It must be the
 // last thing called from every subcommand's RunE so that:
@@ -27,26 +52,31 @@ type ErrorResponse struct {
 //   - json mode errors go to stdout as a single JSON object (never cobra's
 //     default "Error: ..." text, which SilenceErrors/SilenceUsage prevent)
 //   - the process exits non-zero on any error, in both modes
+//
+// Instead of exiting directly it returns an already-marked error; main.go
+// performs the actual exit so flag-parse failures (which never reach RunE)
+// get the same non-zero treatment WITH a visible message.
 func ReportAndExit(err error, format string) error {
 	if err == nil {
 		return nil
 	}
 
-	if format == FormatJSON {
-		out, marshalErr := json.Marshal(ErrorResponse{Error: err.Error()})
-		if marshalErr == nil {
-			fmt.Fprintln(os.Stdout, string(out))
+	if !IsReported(err) {
+		if format == FormatJSON {
+			out, marshalErr := json.Marshal(ErrorResponse{Error: err.Error()})
+			if marshalErr == nil {
+				fmt.Fprintln(os.Stdout, string(out))
+			} else {
+				// Marshal itself failed: fall back to a hand-built JSON object
+				// so output stays parseable even in this edge case.
+				fmt.Fprintf(os.Stdout, "{\"error\":%q}\n", err.Error())
+			}
 		} else {
-			// Marshal itself failed: fall back to a hand-built JSON object
-			// so output stays parseable even in this edge case.
-			fmt.Fprintf(os.Stdout, "{\"error\":%q}\n", err.Error())
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 	}
 
-	os.Exit(1)
-	return nil // unreachable, kept for signature compatibility
+	return WrapReported(err)
 }
 
 // WriteJSONResponse marshals any response value as a single JSON line to
