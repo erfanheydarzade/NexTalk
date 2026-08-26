@@ -13,7 +13,6 @@ import (
 	"fmt"
 
 	"github.com/erfanheydarzade/nanopack"
-	"golang.org/x/crypto/sha3"
 )
 
 // ContextID is a unique identifier for a message context ("group").
@@ -58,6 +57,17 @@ const (
 	MessageContextFieldMetadataVersion uint8 = 3
 	MessageContextFieldCreatorID       uint8 = 4
 	MessageContextFieldSignature       uint8 = 5
+)
+
+// Nanopack envelope schema IDs used by the file-backed stores
+// (internal/binstore). Permanent once shipped.
+const (
+	// MessageContextSchemaID frames MessageContext records (contexts.np).
+	MessageContextSchemaID byte = 10
+	// MessageDeliverySchemaID frames MessageDelivery records (deliveries.np).
+	MessageDeliverySchemaID byte = 11
+	// PolicySchemaID frames LocalRecipientPolicy records (policies.np).
+	PolicySchemaID byte = 44
 )
 
 // MessageContext is the authenticated presentation metadata for a logical
@@ -145,26 +155,9 @@ func VerifyContext(ctx *MessageContext, creatorPub ed25519.PublicKey) error {
 	return nil
 }
 
-// VerifyContextSignature verifies the context signature using the CreatorID
-// embedded in the context. The caller must ensure the CreatorID corresponds
-// to a valid peer whose public key is trusted.
-func VerifyContextSignature(ctx *MessageContext) error {
-	if len(ctx.Signature) != ed25519.SignatureSize {
-		return fmt.Errorf("invalid signature length")
-	}
-	// Note: In a real implementation, we'd resolve CreatorID to a public key
-	// from a trust store. For now, we verify the signature format is valid.
-	// The actual key resolution happens at the client/transport layer.
-	payload, err := signContextPayload(ctx)
-	if err != nil {
-		return fmt.Errorf("marshal context for verification: %w", err)
-	}
-	// We can't verify without the public key here — this is a placeholder
-	// that validates the signature format. Real verification requires
-	// resolving CreatorID to an ed25519.PublicKey.
-	_ = payload
-	return nil // Signature format is valid; key binding verified at higher layer
-}
+// VerifyContextSignature is implemented in wire.go: it resolves the creator's
+// Ed25519 public key from the CreatorID peer ID and verifies the signature,
+// authenticating the metadata and its origin in one step.
 
 // GenerateContextID creates a new random context ID.
 func GenerateContextID() ContextID {
@@ -529,16 +522,4 @@ func DefaultFanoutConfig() FanoutConfig {
 		MaxRetries:             3,
 		RequireAcknowledgement: false,
 	}
-}
-
-// VerifyContextID derives a deterministic ID from context metadata for
-// verification purposes. Uses SHA3-256 of the canonical context payload.
-func VerifyContextID(ctx *MessageContext) (ContextID, error) {
-	payload, err := signContextPayload(ctx)
-	if err != nil {
-		return "", err
-	}
-	h := sha3.New256()
-	h.Write(payload)
-	return ContextID(hex.EncodeToString(h.Sum(nil)[:16])), nil
 }
