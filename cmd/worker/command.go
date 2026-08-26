@@ -5,6 +5,7 @@ import (
 
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"github.com/spf13/cobra"
@@ -16,6 +17,10 @@ const requestTimeout = 15 * time.Second
 type Command struct {
 	engine *core.Engine
 	cfg    config.Config
+
+	// testRelay, when non-nil, is returned by relay() instead of building a
+	// live worker adapter — used by tests to exercise the full listen path.
+	testRelay relay.Relay
 }
 
 // Register mounts the worker subcommands onto parent.
@@ -29,15 +34,27 @@ func Register(parent *cobra.Command, engine *core.Engine, cfg config.Config) {
 			return nil
 		},
 	}
+	// The group-chat standard surface — identical commands in every
+	// transport (`nextalk worker context|send-multi|contexts|mailbox`).
 	group.AddCommand(
-		wc.InitCommand(),
-		wc.ConnectCommand(),
-		wc.ListenCommand(),
-		wc.EncryptCommand(),
+		groupchat.ContextCLI(groupchat.CLIOptions{Relay: wc.relay}),
+		groupchat.SendMultiCLI(groupchat.CLIOptions{Relay: wc.relay}),
+		groupchat.ContextsCLI(groupchat.CLIOptions{}),
+		groupchat.MailboxCLI(groupchat.CLIOptions{}),
 	)
+
+	// Every worker subcommand takes -i/--id: offer local identities for
+	// flag-value completion (`nextalk worker listen -i <Tab>`).
+	for _, sub := range group.Commands() {
+		_ = sub.RegisterFlagCompletionFunc("id", completeLocalID)
+	}
+
 	parent.AddCommand(group)
 }
 
 func (wc *Command) relay() (relay.Relay, error) {
+	if wc.testRelay != nil {
+		return wc.testRelay, nil
+	}
 	return workerrelay.New(wc.cfg.WorkerURL)
 }

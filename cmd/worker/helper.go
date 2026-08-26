@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/erfanheydarzade/NexTalk/crypto"
+	"github.com/erfanheydarzade/NexTalk/internal"
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
 )
 
@@ -14,15 +16,9 @@ import (
 // prints status to stderr and data to stdout; "json" prints exactly one
 // JSON object to stdout and nothing else.
 const (
-	formatHuman = "human"
-	formatJSON  = "json"
+	formatHuman = internal.FormatHuman
+	formatJSON  = internal.FormatJSON
 )
-
-// errorResponse is the JSON shape used to report failures when --format json
-// is active, so programmatic consumers get a parseable object either way.
-type errorResponse struct {
-	Error string `json:"error"`
-}
 
 func validateEncoding(enc string) error {
 	switch codec.Encoding(enc) {
@@ -42,20 +38,22 @@ func validateFormat(format string) error {
 	}
 }
 
-// reportAndExit renders err in the requested format and returns it unchanged
-// so cobra can still translate it into a non-zero exit code. Commands must
-// set SilenceUsage/SilenceErrors so cobra never prints its own error on top
-// of this.
+// describeDecryptError translates raw crypto failures into text a user can
+// act on. The ratchet replay case in particular is almost never an attack —
+// it means the sender's session state was rolled back (typically two
+// NexTalk processes running as the same identity).
+func describeDecryptError(err error) string {
+	if errors.Is(err, crypto.ErrReplay) {
+		return "rejected: the sender's session state was rolled back " +
+			"(two NexTalk processes sharing their identity?) — have them run 'connect' again"
+	}
+	return err.Error()
+}
+
+// reportAndExit renders err in the requested format and returns it marked
+// as already-reported so main.go exits non-zero without double-printing.
 func reportAndExit(err error, format string) error {
-	if err == nil {
-		return nil
-	}
-	if format == formatJSON {
-		_ = writeJSON(errorResponse{Error: err.Error()})
-	} else {
-		fmt.Fprintf(os.Stderr, "[✗] %v\n", err)
-	}
-	return err
+	return internal.ReportAndExit(err, format)
 }
 
 // writeJSON writes v as a single JSON line to stdout — the only thing a

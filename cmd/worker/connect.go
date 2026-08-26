@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,11 @@ func (c *Command) ConnectCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := c.RunConnect(localPeer, remotePeer, format)
 			return reportAndExit(err, format)
+		},
+		// Tab completion for the -r slot: established peers + contact aliases.
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			return groupchat.FilterByPrefix(groupchat.PeerCandidates(flagString(cmd, "id")), toComplete),
+				cobra.ShellCompDirectiveNoFileComp
 		},
 	}
 

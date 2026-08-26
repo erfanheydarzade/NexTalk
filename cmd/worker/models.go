@@ -26,6 +26,7 @@ type ListenEvent struct {
 	Sender   string         `json:"sender,omitempty"`
 	Encoding string         `json:"encoding,omitempty"`
 	Message  string         `json:"message,omitempty"`
+	Context  string         `json:"context,omitempty"`
 	Actions  []ListenAction `json:"actions,omitempty"`
 }
 
