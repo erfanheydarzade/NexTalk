@@ -34,9 +34,14 @@ func Register(parent *cobra.Command, engine *core.Engine, cfg config.Config) {
 			return nil
 		},
 	}
-	// The group-chat standard surface — identical commands in every
-	// transport (`nextalk worker context|send-multi|contexts|mailbox`).
 	group.AddCommand(
+		wc.InitCommand(),
+		wc.ConnectCommand(),
+		wc.ListenCommand(),
+		wc.EncryptCommand(),
+
+		// The group-chat standard surface — identical commands in every
+		// transport (`nextalk worker context|send-multi|contexts|mailbox`).
 		groupchat.ContextCLI(groupchat.CLIOptions{Relay: wc.relay}),
 		groupchat.SendMultiCLI(groupchat.CLIOptions{Relay: wc.relay}),
 		groupchat.ContextsCLI(groupchat.CLIOptions{}),
