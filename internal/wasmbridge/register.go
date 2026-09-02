@@ -63,12 +63,18 @@ func Register() {
 	contextNs := js.Global().Get("Object").New()
 	contextNs.Set("createContext", js.FuncOf(guard(jsContextCreateContext)))
 	contextNs.Set("list", js.FuncOf(guard(jsContextList)))
+	contextNs.Set("show", js.FuncOf(guard(jsContextShow)))
+	contextNs.Set("rename", js.FuncOf(guard(jsContextRename)))
 	contextNs.Set("addMember", js.FuncOf(guard(jsContextAddMember)))
 	contextNs.Set("excludeMember", js.FuncOf(guard(jsContextExcludeMember)))
 	contextNs.Set("includeMember", js.FuncOf(guard(jsContextIncludeMember)))
+	contextNs.Set("muteMember", js.FuncOf(guard(jsContextMute)))
+	contextNs.Set("blockMember", js.FuncOf(guard(jsContextBlock)))
+	contextNs.Set("removeMember", js.FuncOf(guard(jsContextRemoveMember)))
 	contextNs.Set("listMembers", js.FuncOf(guard(jsContextListMembers)))
 	contextNs.Set("sendMulti", js.FuncOf(guard(jsContextSendMulti)))
 	contextNs.Set("getEffectiveRecipients", js.FuncOf(guard(jsContextGetEffectiveRecipients)))
+	contextNs.Set("drop", js.FuncOf(guard(jsContextDrop)))
 	ns.Set("context", contextNs)
 
 	// sessions.go — introspection over st.Sessions; nothing here mutates

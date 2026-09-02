@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -27,6 +27,16 @@ type Fanout struct {
 	// This is an in-memory cache; persistent replay protection is handled by
 	// the underlying crypto session's nonce tracking.
 	seenDeliveries map[DeliveryID]bool
+	// seenMessages dedupes inbound logical messages by (sender, MessageID),
+	// so a group message is displayed once even if the relay redelivers the
+	// envelope in the same session.
+	seenMessages map[messageKey]bool
+}
+
+// messageKey identifies one logical inbound group message.
+type messageKey struct {
+	Sender    string
+	MessageID MessageID
 }
 
 // NewFanout creates a new Fanout instance.
@@ -47,6 +57,7 @@ func NewFanout(
 		deliveryStore:  deliveryStore,
 		config:         config,
 		seenDeliveries: make(map[DeliveryID]bool),
+		seenMessages:   make(map[messageKey]bool),
 	}
 }
 
@@ -91,23 +102,30 @@ func (f *Fanout) CreateContext(displayName string, creatorPriv ed25519.PrivateKe
 // Version must be monotonically increasing — older versions are rejected
 // to prevent rollback attacks.
 func (f *Fanout) UpdateContext(contextID ContextID, newDisplayName string, creatorPriv ed25519.PrivateKey) (*MessageContext, error) {
-	ctx, err := f.CtxStore.LoadContext(contextID)
+	stored, err := f.CtxStore.LoadContext(contextID)
 	if err != nil {
 		return nil, fmt.Errorf("load context: %w", err)
 	}
-	if ctx.CreatorID != f.client.Id {
+	if stored.CreatorID != f.client.Id {
 		return nil, fmt.Errorf("only context creator can update metadata")
 	}
 
 	// Enforce monotonic version increase
-	currentVersion := ctx.MetadataVersion
-	newVersion := currentVersion + 1
-	if newVersion <= currentVersion {
+	newVersion := stored.MetadataVersion + 1
+	if newVersion <= stored.MetadataVersion {
 		return nil, fmt.Errorf("context version overflow")
 	}
 
-	ctx.DisplayName = newDisplayName
-	ctx.MetadataVersion = newVersion
+	// Build a fresh struct rather than mutating the stored one in place:
+	// stores may hand back their internal pointer, and SaveContext's
+	// monotonicity check compares against the stored version — mutating it
+	// first would make the update compare against itself and be rejected.
+	ctx := &MessageContext{
+		ContextID:       stored.ContextID,
+		DisplayName:     newDisplayName,
+		MetadataVersion: newVersion,
+		CreatorID:       stored.CreatorID,
+	}
 	if err := SignContext(ctx, creatorPriv); err != nil {
 		return nil, fmt.Errorf("sign updated context: %w", err)
 	}
@@ -283,7 +301,7 @@ func (f *Fanout) SendMultiMessage(
 		}
 
 		// Encrypt using the existing 1:1 secure channel with AAD binding
-		ciphertext, err := encryptWithAAD(session, f.client.Id, plaintext, aad)
+		ciphertext, err := encryptWithAAD(session, f.client.Id, plaintext, aad, msgCtx)
 		if err != nil {
 			results = append(results, DeliveryResult{
 				DeliveryID: deliveryID,
@@ -322,6 +340,18 @@ func (f *Fanout) SendMultiMessage(
 		return nil, fmt.Errorf("no deliveries created")
 	}
 
+	// Persist the advanced ratchet state. Encryption above goes through
+	// session.Encrypt directly (not Client.Encrypt), so without an explicit
+	// save the send-chain nonces advance in memory only. A subsequent
+	// process would re-send with already-consumed nonces and every receiver
+	// would hard-reject the delivery as a replay.
+	for _, r := range results {
+		if r.Status == DeliverySent {
+			client.SaveClient(f.client)
+			break
+		}
+	}
+
 	result := &FanoutResult{
 		MessageID:  msgID,
 		Sender:     f.client.Id,
@@ -342,38 +372,22 @@ func (f *Fanout) SendMultiMessage(
 }
 
 // encryptWithAAD encrypts plaintext using the session's AEAD with additional
-// authenticated data binding the delivery to its context, message, sender, and recipient.
-func encryptWithAAD(session *crypto.SecurePeer, senderID string, plaintext, aad []byte) ([]byte, error) {
-	// We need to use the existing Encrypt method but with custom AAD.
-	// The existing Encrypt method uses dhPub||nonce as AAD internally.
-	// For multi-message, we wrap the plaintext with delivery metadata,
-	// then encrypt. The recipient verifies the metadata after decryption.
-
-	// Build wrapped plaintext: [msg_id|ctx_id|sender|recipient|version|original_plaintext]
-	wrapped := wrapPlaintext(plaintext, aad)
-
+// authenticated data binding the delivery to its context, message, sender, and
+// recipient. The wrapped payload (v2 wire format) embeds the same binding
+// inside the ciphertext plus the creator-signed context descriptor, so the
+// recipient can parse which group/message a delivery belongs to and verify it
+// was not transplanted.
+func encryptWithAAD(session *crypto.SecurePeer, senderID string, plaintext, aad []byte, msgCtx *MessageContext) ([]byte, error) {
+	wrapped, err := wrapPayloadV2(aad, msgCtx, plaintext)
+	if err != nil {
+		return nil, err
+	}
 	return session.Encrypt(senderID, wrapped)
 }
 
-// decryptWithAAD decrypts ciphertext and verifies the AAD binding matches
-// the expected delivery metadata.
-func decryptWithAAD(session *crypto.SecurePeer, ciphertext []byte, expectedAAD []byte) (string, []byte, error) {
-	senderID, wrapped, err := session.Decrypt(ciphertext)
-	if err != nil {
-		return "", nil, err
-	}
-
-	// Unwrap and verify AAD binding
-	plaintext, err := unwrapPlaintext(wrapped, expectedAAD)
-	if err != nil {
-		return senderID, nil, fmt.Errorf("AAD verification failed: %w", err)
-	}
-
-	return senderID, plaintext, nil
-}
-
-// wrapPlaintext prepends delivery metadata to the plaintext for AAD binding.
-// Format: [msgID_len(1)|msgID|ctxID_len(1)|ctxID|sender_len(1)|sender|recipient_len(1)|recipient|version(8)|plaintext]
+// wrapPlaintext / unwrapPlaintext define the legacy v1 wire shape
+// (AAD || plaintext) and are kept as the reference implementation used by
+// the compatibility tests; current sends go through wrapPayloadV2.
 func wrapPlaintext(plaintext []byte, aad []byte) []byte {
 	// aad is the canonical AAD bytes: msgID|ctxID|sender|recipient|version
 	return append(aad, plaintext...)
@@ -474,130 +488,134 @@ func (f *Fanout) RetryUndelivered(ctx context.Context) error {
 	return nil
 }
 
-// ReceiveMultiMessage processes incoming multi-message deliveries.
-// It decrypts each delivery using the appropriate 1:1 session, checks for
-// replay/deduplication, and returns the logical messages.
-func (f *Fanout) ReceiveMultiMessage(ctx context.Context) ([]*MultiMessage, error) {
-	// Receive all messages from relay
+// InboundMessage is one decrypted, verified group message.
+type InboundMessage struct {
+	// Sender is the authenticated author (HMAC-verified by the ratchet).
+	Sender string
+	// Meta is the binding parsed from inside the ciphertext.
+	Meta DeliveryMeta
+	// Context is the resolved context descriptor, preferring the sender's
+	// embedded metadata and falling back to any locally stored copy.
+	Context *MessageContext
+	// Plaintext is the original message body.
+	Plaintext []byte
+}
+
+// ContextID returns the group this message belongs to.
+func (m *InboundMessage) ContextID() ContextID {
+	if m.Context != nil && m.Context.ContextID != "" {
+		return m.Context.ContextID
+	}
+	return m.Meta.ContextID
+}
+
+// DisplayName returns a human-readable group name, falling back to a
+// truncated context ID for unknown groups.
+func (m *InboundMessage) DisplayName() string {
+	if m.Context != nil && m.Context.DisplayName != "" {
+		return m.Context.DisplayName
+	}
+	id := string(m.Meta.ContextID)
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return "group:" + id
+}
+
+// ProcessDelivery decrypts one inbound TypeMultiMsg ciphertext against the
+// local session with the sender, parses the wrapped payload, verifies the
+// delivery binding (rejecting transplanted ciphertexts), applies any embedded
+// context metadata to the local store, dedupes redeliveries, and returns the
+// logical message.
+func (f *Fanout) ProcessDelivery(selfID string, ciphertext []byte) (*InboundMessage, error) {
+	frameSender, wrapped, err := f.client.Decrypt(ciphertext)
+	if err != nil {
+		if errors.Is(err, crypto.ErrReplay) {
+			// Wrap (%w) rather than replace, so callers upstream can still
+			// classify the failure via errors.Is.
+			return nil, fmt.Errorf(
+				"message from %s rejected: the sender's session state was rolled back "+
+					"(two NexTalk processes sharing their identity?) — have them run 'connect' again: %w",
+				shortPeer(frameSender), err)
+		}
+		return nil, fmt.Errorf("decrypt delivery: %w", err)
+	}
+
+	parsed, err := ParseWrapped(wrapped)
+	if err != nil {
+		return nil, fmt.Errorf("parse delivery from %s: %w", shortPeer(frameSender), err)
+	}
+
+	// Binding checks: the AAD claims are authenticated only insofar as they
+	// agree with the ratchet-authenticated sender and our own identity.
+	if parsed.Meta.Sender != "" && parsed.Meta.Sender != frameSender {
+		return nil, fmt.Errorf("delivery binding mismatch: claimed sender %s but frame sender %s",
+			shortPeer(parsed.Meta.Sender), shortPeer(frameSender))
+	}
+	if parsed.Meta.Recipient != "" && parsed.Meta.Recipient != selfID {
+		return nil, fmt.Errorf("delivery bound to another recipient (%s) — transplant rejected",
+			shortPeer(parsed.Meta.Recipient))
+	}
+	if parsed.Meta.Sender == "" {
+		parsed.Meta.Sender = frameSender
+	}
+
+	// Dedupe on (sender, message ID). The Double Ratchet already rejects
+	// replayed identical frames; this catches distinct re-encryptions of the
+	// same logical message within one process lifetime.
+	key := messageKey{Sender: frameSender, MessageID: parsed.Meta.MessageID}
+	f.mu.Lock()
+	seen := f.seenMessages[key]
+	if !seen {
+		f.seenMessages[key] = true
+	}
+	f.mu.Unlock()
+	if seen {
+		return nil, ErrDuplicateDelivery
+	}
+
+	// Learn/refresh group metadata from the signed descriptor when present.
+	if parsed.Context != nil {
+		if err := f.ApplyRemoteContext(parsed.Context); err != nil {
+			// Stale-version conflicts mean we already know newer metadata —
+			// keep going with what we have rather than dropping the message.
+			parsed.Context = nil
+		}
+	}
+	if parsed.Context == nil {
+		// Fall back to locally stored metadata (e.g. we are also a member).
+		if ctx, err := f.CtxStore.LoadContext(parsed.Meta.ContextID); err == nil {
+			parsed.Context = ctx
+		}
+	}
+
+	return &InboundMessage{
+		Sender:    frameSender,
+		Meta:      parsed.Meta,
+		Context:   parsed.Context,
+		Plaintext: parsed.Plaintext,
+	}, nil
+}
+
+// ReceiveMultiMessage polls the relay and processes every inbound
+// multi-message delivery. Envelopes that fail to decrypt or verify are
+// skipped so one bad peer cannot block the batch.
+func (f *Fanout) ReceiveMultiMessage(ctx context.Context) ([]*InboundMessage, error) {
 	msgs, err := f.relay.Receive(ctx, f.client.IdentityPrivate)
 	if err != nil {
 		return nil, err
 	}
 
-	// Group deliveries by MessageID
-	deliveriesByMsgID := make(map[MessageID][]*MessageDelivery)
-
+	var messages []*InboundMessage
 	for _, m := range msgs {
-		if len(m.Body) == 0 {
-			continue
-		}
-		envType := relay.Type(m.Body[0])
-		if envType != relay.TypeMultiMsg {
+		if len(m.Body) == 0 || relay.Type(m.Body[0]) != relay.TypeMultiMsg {
 			continue // Not a multi-message delivery
 		}
-		ciphertext := m.Body[1:]
-
-		// Decrypt using our session with the sender
-		senderID, _, err := f.client.Decrypt(ciphertext)
+		inbound, err := f.ProcessDelivery(f.client.Id, m.Body[1:])
 		if err != nil {
-			continue // Can't decrypt, maybe no session yet
+			continue // Undecryptable, duplicate, or untrusted — skip
 		}
-
-		// Create a delivery record
-		delivery := &MessageDelivery{
-			DeliveryID: GenerateDeliveryID(),
-			MessageID:  MessageID(hex.EncodeToString(ciphertext[:8])), // Use first bytes as proxy
-			Recipient:  f.client.Id,
-			ChannelID:  senderID, // Channel ID = sender for inbound
-			Ciphertext: ciphertext,
-			Timestamp:  time.Now().UnixMilli(),
-		}
-
-		// Check for replay
-		if !f.MarkDeliverySeen(delivery.DeliveryID) {
-			continue // Duplicate delivery
-		}
-
-		// Store delivery
-		if err := f.deliveryStore.SaveDelivery(delivery); err != nil {
-			_ = err // Log but continue
-		}
-
-		// Group by message ID
-		deliveriesByMsgID[delivery.MessageID] = append(deliveriesByMsgID[delivery.MessageID], delivery)
+		messages = append(messages, inbound)
 	}
-
-	// Convert grouped deliveries to MultiMessage results
-	var messages []*MultiMessage
-	for msgID, deliveries := range deliveriesByMsgID {
-		if len(deliveries) == 0 {
-			continue
-		}
-		mm := &MultiMessage{
-			MessageID:  msgID,
-			Deliveries: make([]MessageDelivery, len(deliveries)),
-		}
-		for i, d := range deliveries {
-			mm.Deliveries[i] = *d
-		}
-		messages = append(messages, mm)
-	}
-
 	return messages, nil
-}
-
-// ContextManager provides high-level context management operations.
-type ContextManager struct {
-	fanout *Fanout
-}
-
-// NewContextManager creates a new ContextManager.
-func NewContextManager(f *Fanout) *ContextManager {
-	return &ContextManager{fanout: f}
-}
-
-// CreateContext creates a new context with the given display name.
-func (cm *ContextManager) CreateContext(displayName string) (*MessageContext, error) {
-	return cm.fanout.CreateContext(displayName, cm.fanout.client.IdentityPrivate)
-}
-
-// AddRecipient adds a recipient to the local delivery set for a context.
-func (cm *ContextManager) AddRecipient(contextID ContextID, recipient string) error {
-	return cm.fanout.SetRecipientPolicy(contextID, recipient, PolicyEnabled)
-}
-
-// RemoveRecipient removes a recipient from the local delivery set (PolicyExcluded).
-func (cm *ContextManager) RemoveRecipient(contextID ContextID, recipient string) error {
-	return cm.fanout.SetRecipientPolicy(contextID, recipient, PolicyExcluded)
-}
-
-// MuteRecipient mutes a recipient locally (delivery happens, UI suppresses).
-func (cm *ContextManager) MuteRecipient(contextID ContextID, recipient string) error {
-	return cm.fanout.SetRecipientPolicy(contextID, recipient, PolicyMuted)
-}
-
-// BlockRecipient blocks a recipient locally (no delivery).
-func (cm *ContextManager) BlockRecipient(contextID ContextID, recipient string) error {
-	return cm.fanout.SetRecipientPolicy(contextID, recipient, PolicyBlocked)
-}
-
-// ListContexts returns all known contexts.
-func (cm *ContextManager) ListContexts() ([]*MessageContext, error) {
-	return cm.fanout.CtxStore.ListContexts()
-}
-
-// GetContext returns a context by ID.
-func (cm *ContextManager) GetContext(id ContextID) (*MessageContext, error) {
-	return cm.fanout.CtxStore.LoadContext(id)
-}
-
-// RenameContext updates the display name of a context.
-func (cm *ContextManager) RenameContext(id ContextID, newName string) (*MessageContext, error) {
-	return cm.fanout.UpdateContext(id, newName, cm.fanout.client.IdentityPrivate)
-}
-
-// Send sends a multi-user message to all effective recipients in a context.
-// Returns a FanoutResult with per-recipient delivery status.
-func (cm *ContextManager) Send(ctx context.Context, contextID ContextID, message string, recipients []string) (*FanoutResult, error) {
-	return cm.fanout.SendMultiMessage(ctx, contextID, []byte(message), recipients)
 }

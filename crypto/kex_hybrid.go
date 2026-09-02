@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -21,6 +22,14 @@ import (
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/sha3"
 )
+
+// ErrReplay marks frames rejected because their nonce predates the receive
+// chain. Genuine replays are rare in practice — far more often this means
+// the SENDER's session state was rolled back (e.g. two NexTalk processes
+// sharing one identity, or a restored <id>.json), so they re-sent with
+// nonces the receiver has already consumed. Callers should surface it as an
+// actionable condition, not a security alarm.
+var ErrReplay = errors.New("replay attack or message too old")
 
 var lowSecurity = false
 
@@ -158,7 +167,13 @@ func DerivePeerID(identityPublic, dilithiumPublic []byte) string {
 	h.Write(dilithiumPublic)
 	dilHash := h.Sum(nil)
 
-	combined := append(identityPublic, dilHash...)
+	// Explicit copy — NEVER `append(identityPublic, ...)`. Callers hand us
+	// slices that alias larger buffers (e.g. nanopack-decoded wire frames,
+	// where Data points into the payload); append would then write dilHash
+	// through their spare capacity and corrupt whatever field follows.
+	combined := make([]byte, 0, len(identityPublic)+len(dilHash))
+	combined = append(combined, identityPublic...)
+	combined = append(combined, dilHash...)
 	return base58.Encode(combined)
 }
 
@@ -311,7 +326,12 @@ func (sp *SecurePeer) Handshake(
 		return err
 	}
 
-	hybridSharedSecret := append(eccShared, pqcSharedSecret...)
+	// Explicit copy — never append(eccShared, ...): eccShared may alias a
+	// buffer with spare capacity (circl-returned slices are not guaranteed
+	// exact-cap), and appending would write pqcSharedSecret through it.
+	hybridSharedSecret := make([]byte, 0, len(eccShared)+len(pqcSharedSecret))
+	hybridSharedSecret = append(hybridSharedSecret, eccShared...)
+	hybridSharedSecret = append(hybridSharedSecret, pqcSharedSecret...)
 
 	p1, _ := sp.sortedByHash(peerIdentityBytes, sp.IdentityPublicBytes())
 	sp.AmInitiator = bytes.Equal(p1, sp.IdentityPublicBytes())
@@ -592,8 +612,8 @@ func (sp *SecurePeer) Decrypt(payloadBytes []byte) (string, []byte, error) {
 
 	// Reject replays / messages from a past epoch.
 	if nonce < sp.RecvNonce {
-		return "", nil, fmt.Errorf("replay attack or message too old (N=%d, expected >= %d)",
-			nonce, sp.RecvNonce)
+		return "", nil, fmt.Errorf("%w (N=%d, expected >= %d)",
+			ErrReplay, nonce, sp.RecvNonce)
 	}
 
 	// Advance chain key, stashing keys for any gaps (out-of-order delivery).

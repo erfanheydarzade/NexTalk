@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/erfanheydarzade/NexTalk/internal/contacts"
+	"github.com/erfanheydarzade/NexTalk/internal/mailbox"
 	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
@@ -83,11 +84,11 @@ func (s *State) SyncPeersFromClient() {
 // matter how it arrived:
 //
 //  1. KnownPeers — anything seen this session (connect/offer/answer/message).
-//  2. Mailbox    — peers with chat history.
+//  2. MailboxStore — peers with chat history (persists across restarts).
 //  3. Sessions   — peers persisted in the loaded identity's <id>.json, which
 //     survives a restart.
 func (s *State) peerIDs() map[string]bool {
-	set := make(map[string]bool, len(s.KnownPeers)+len(s.Mailbox))
+	set := make(map[string]bool, len(s.KnownPeers))
 	add := func(id string) {
 		if !isPending(id) {
 			set[id] = true
@@ -97,8 +98,18 @@ func (s *State) peerIDs() map[string]bool {
 	for id := range s.KnownPeers {
 		add(id)
 	}
-	for id := range s.Mailbox {
-		add(id)
+	if s.MailboxStore != nil {
+		for _, t := range s.MailboxStore.List() {
+			if !mailbox.IsGroupKey(t.Key) {
+				add(t.Key)
+			}
+			// Group threads also surface their authors as known peers.
+			for _, m := range t.Messages {
+				if m.Sender != "" && m.Sender != "Me" {
+					add(m.Sender)
+				}
+			}
+		}
 	}
 	if s.ActiveClient != nil {
 		for id := range s.ActiveClient.Sessions {

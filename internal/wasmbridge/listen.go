@@ -18,13 +18,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"syscall/js"
 	"unicode/utf8"
 
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/crypto"
+	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"golang.org/x/crypto/ed25519"
@@ -86,6 +87,8 @@ func dispatchEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.Priva
 		return handleAnswerEnvelope(data)
 	case relay.TypeMessage:
 		return handleMessageEnvelope(data)
+	case relay.TypeMultiMsg:
+		return handleGroupMessageEnvelope(data)
 	default:
 		return nil, fmt.Errorf("unknown envelope type: %d", t)
 	}
@@ -96,9 +99,9 @@ func dispatchEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.Priva
 // to the sender's identity pubkey (offer.IdPub — no peer-ID roundtrip
 // needed here, we already have the raw key from the offer itself).
 func handleOfferEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.PrivateKey, data []byte) (map[string]any, error) {
-	var offer core.HandShakeOffer
-	if err := json.Unmarshal(data, &offer); err != nil {
-		return nil, fmt.Errorf("unmarshal offer: %w", err)
+	offer, err := core.DecodeOffer(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode offer: %w", err)
 	}
 
 	st.mu.Lock()
@@ -130,21 +133,19 @@ func handleOfferEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.Pr
 
 // handleAnswerEnvelope mirrors cmd/worker/listen.go's handleAnswer.
 func handleAnswerEnvelope(data []byte) (map[string]any, error) {
-	var hdr struct {
-		SenderId string `json:"senderId"`
-	}
-	if err := json.Unmarshal(data, &hdr); err != nil {
-		return nil, fmt.Errorf("unmarshal answer header: %w", err)
+	senderID, err := core.PeekAnswerSenderID(data)
+	if err != nil {
+		return nil, fmt.Errorf("peek answer header: %w", err)
 	}
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	peer, okp := st.Sessions["pending_"+hdr.SenderId]
+	peer, okp := st.Sessions["pending_"+senderID]
 	if !okp {
 		peer, okp = st.Sessions["pending"]
 		if !okp {
-			return nil, fmt.Errorf("no pending session found for %s", hdr.SenderId)
+			return nil, fmt.Errorf("no pending session found for %s", senderID)
 		}
 	}
 
@@ -199,6 +200,55 @@ func handleMessageEnvelope(data []byte) (map[string]any, error) {
 	} else {
 		event["encoding"] = "base64"
 		event["message"] = base64.StdEncoding.EncodeToString(plaintext)
+	}
+	return event, nil
+}
+
+// handleGroupMessageEnvelope processes an inbound multi-message (0x04)
+// delivery end-to-end — the browser equivalent of the shell's TypeMultiMsg
+// dispatch and `nextalk worker listen`'s group_message event:
+//
+//	decrypt over the 1:1 session → parse the embedded binding → verify the
+//	delivery was not transplanted → adopt the creator-signed group metadata
+//	(so JS learns the display name straight from the message) → dedupe
+//	redeliveries → emit a group_message event.
+func handleGroupMessageEnvelope(data []byte) (map[string]any, error) {
+	st.mu.Lock()
+	if st.Fanout == nil || st.ContextStore == nil {
+		ensureFanoutLocked()
+	}
+	fanout := st.Fanout
+	selfID := st.Id
+	st.mu.Unlock()
+
+	if fanout == nil {
+		return nil, fmt.Errorf("group message received but no identity is loaded")
+	}
+
+	inbound, err := fanout.ProcessDelivery(selfID, data)
+	if err != nil {
+		if errors.Is(err, multimsg.ErrDuplicateDelivery) {
+			// Already delivered in this page's lifetime; not worth surfacing.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("group message %s", err.Error())
+	}
+
+	body := string(inbound.Plaintext)
+	encoding := "utf-8"
+	if !utf8.Valid(inbound.Plaintext) {
+		body = base64.StdEncoding.EncodeToString(inbound.Plaintext)
+		encoding = "base64"
+	}
+
+	event := map[string]any{
+		"type":       "group_message",
+		"sender":     inbound.Sender,
+		"context_id": string(inbound.ContextID()),
+		"context":    inbound.DisplayName(),
+		"message":    body,
+		"encoding":   encoding,
+		"message_id": string(inbound.Meta.MessageID),
 	}
 	return event, nil
 }

@@ -91,3 +91,28 @@ var st = &state{
 	eng:      core.NewEngine(),
 	Contacts: &contacts.Store{Contacts: make(map[string]contacts.Contact)},
 }
+
+// replaceIdentityLocked swaps the active identity for a freshly parsed one.
+// Caller holds st.mu. Field-wise assignment (not `*st = loaded`) because the
+// struct embeds a sync.Mutex, which must not be copied; it also lets us
+// reset derived state (fanout/context stores) that belonged to the old
+// identity and is deliberately excluded from the exported JSON.
+func replaceIdentityLocked(loaded *state) {
+	st.Id = loaded.Id
+	st.IdentityPrivate = loaded.IdentityPrivate
+	st.IdentityPublic = loaded.IdentityPublic
+	st.DilithiumPrivate = loaded.DilithiumPrivate
+	st.DilithiumPublic = loaded.DilithiumPublic
+	st.Sessions = loaded.Sessions
+	// Contacts / eng are already set on loaded by the caller (global, shared).
+	st.Contacts = loaded.Contacts
+	st.eng = loaded.eng
+	st.ActiveClient = loaded.ActiveClient
+	// Relay connection: dropped on import — JS reconnects explicitly.
+	st.relayConn = nil
+	st.relayKind = ""
+	// Derived multi-message state belongs to the old identity.
+	st.ContextStore = nil
+	st.DeliveryStore = nil
+	st.Fanout = nil
+}

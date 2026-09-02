@@ -110,6 +110,17 @@
         <button id="btnInclude">include</button>
       </div>
       <div class="row">
+        <button id="btnMuteMember">mute</button>
+        <button id="btnBlockMember">block</button>
+        <button id="btnRemoveMember">removeMember</button>
+      </div>
+      <div class="row">
+        <input id="ctxRename" type="text" placeholder="new name" style="width:12rem" />
+        <button id="btnRenameCtx">rename</button>
+        <button id="btnShowCtx">show</button>
+        <button id="btnDropCtx">drop</button>
+      </div>
+      <div class="row">
         <button id="btnListMembers">listMembers</button>
         <button id="btnGetEffective">getEffectiveRecipients</button>
       </div>
@@ -268,6 +279,24 @@
                 ":",
                 e.message
               );
+              break;
+
+            case "group_message":
+              log(
+                "[group]",
+                e.context || e.context_id,
+                "-",
+                e.sender,
+                ":",
+                e.message
+              );
+
+              // Keep the group controls pointed at the active thread.
+              const gctxId = document.getElementById("ctxId");
+              if (gctxId && !gctxId.value.trim() && e.context_id) {
+                gctxId.value = e.context_id;
+              }
+
               break;
 
             case "error":
@@ -919,6 +948,103 @@
               "in",
               ctxId
             );
+          });
+        }
+
+        /*
+         * mute / block / removeMember — same shape as exclude/include,
+         * different local policy.
+         */
+        const ctxPeerValue = () => {
+          const el = document.getElementById("ctxPeer");
+          return el ? el.value.trim() : "";
+        };
+        const ctxIdValue = () => {
+          const el = document.getElementById("ctxId");
+          return el ? el.value.trim() : "";
+        };
+
+        const memberOp = (id, fn, label) => {
+          const btn = document.getElementById(id);
+          if (!btn) return;
+          btn.onclick = safe(() => {
+            const ctxId = ctxIdValue();
+            const peerId = ctxPeerValue();
+            if (!ctxId || !peerId) {
+              return log("[context." + label + "]", "need context_id and peer_id");
+            }
+            const result = call(fn, ctxId, peerId);
+            if (result && result.error) {
+              return log("[context." + label + "]", result.error);
+            }
+            log("[context." + label + "]", label, peerId, "in", ctxId);
+          });
+        };
+        memberOp("btnMuteMember", NexTalk.context.muteMember, "mute");
+        memberOp("btnBlockMember", NexTalk.context.blockMember, "block");
+        memberOp("btnRemoveMember", NexTalk.context.removeMember, "removeMember");
+
+        const btnRenameCtx =
+          document.getElementById("btnRenameCtx");
+        if (btnRenameCtx) {
+          btnRenameCtx.onclick = safe(() => {
+            const ctxId = ctxIdValue();
+            const nameInput = document.getElementById("ctxRename");
+            const newName = nameInput ? nameInput.value.trim() : "";
+            if (!ctxId || !newName) {
+              return log("[context.rename]", "need context_id and new_name");
+            }
+            if (
+              typeof NexTalk.context.rename !== "function"
+            ) {
+              return log("[context.rename]", "not available");
+            }
+            const result = call(NexTalk.context.rename, ctxId, newName);
+            if (result && result.error) {
+              return log("[context.rename]", result.error);
+            }
+            log(
+              "[context.rename]",
+              "renamed to",
+              result.display_name,
+              "(v" + result.version + ")"
+            );
+          });
+        }
+
+        const btnShowCtx = document.getElementById("btnShowCtx");
+        if (btnShowCtx) {
+          btnShowCtx.onclick = safe(() => {
+            const ctxId = ctxIdValue();
+            if (!ctxId) {
+              return log("[context.show]", "need context_id");
+            }
+            if (typeof NexTalk.context.show !== "function") {
+              return log("[context.show]", "not available");
+            }
+            const result = call(NexTalk.context.show, ctxId);
+            if (result && result.error) {
+              return log("[context.show]", result.error);
+            }
+            log("[context.show]", result);
+          });
+        }
+
+        const btnDropCtx = document.getElementById("btnDropCtx");
+        if (btnDropCtx) {
+          btnDropCtx.onclick = safe(() => {
+            const ctxId = ctxIdValue();
+            if (!ctxId) {
+              return log("[context.drop]", "need context_id");
+            }
+            if (typeof NexTalk.context.drop !== "function") {
+              return log("[context.drop]", "not available");
+            }
+            const result = call(NexTalk.context.drop, ctxId);
+            if (result && result.error) {
+              return log("[context.drop]", result.error);
+            }
+            log("[context.drop]", "dropped", ctxId);
           });
         }
 

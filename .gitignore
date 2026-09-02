@@ -37,6 +37,7 @@ web/wasm/
 # identity / session state files (e.g. <peerID>.json), not project config
 *.json
 *.zip
+*.np
 
 # python test scratch build dir (see test.py)
 .testbuild/

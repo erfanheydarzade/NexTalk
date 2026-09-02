@@ -167,7 +167,8 @@ NexTalk.id()                       // -> "3xk9...s"          current peer id, or
 NexTalk.exportIdentity()           // -> JSON string          persist this (localStorage, IDB, ...)
 NexTalk.importIdentity(json)       // -> { id }               restore a previously exported identity
 
-// Handshake (payloads are base64-encoded JSON; move them however you like,
+// Handshake (payloads are base64 of compact nanopack binary — see
+// https://github.com/erfanheydarzade/nanopack; move them however you like,
 // or hand them straight to NexTalk.relay.send* below)
 NexTalk.createOffer(peerId)        // -> { offer }
 NexTalk.acceptOffer(offerB64)      // -> { senderId, answer }
@@ -186,8 +187,16 @@ await NexTalk.relay.sendOffer(peerId, offerB64)     // -> { ok }              as
 await NexTalk.relay.sendAnswer(peerId, answerB64)   // -> { ok }              async
 await NexTalk.relay.sendMessage(peerId, cipherB64)  // -> { ok }              async
 await NexTalk.relay.receive()          // -> { envelopes: [{ type, data }, ...] }  async
-                                       //    type: 1=offer 2=answer 3=message; data is base64,
-                                       //    feed straight into acceptOffer/finishHandshake/decrypt.
+                                       //    type: 1=offer 2=answer 3=message 4=multi-msg; data is base64.
+                                       //    Types 1–3 feed straight into acceptOffer/finishHandshake/
+                                       //    decrypt — or skip the plumbing and use relay.listen() below,
+                                       //    which also handles type 4 (group messages) for you.
+
+// listen() — one poll-and-dispatch pass, same as `nextalk worker listen`:
+// auto-answers offers, auto-finishes answers, decrypts messages, processes
+// group deliveries. Returns { events: [...] } with the same shapes as the
+// CLI's `listen --format json`, including group_message events.
+await NexTalk.relay.listen()           // -> { events: [{ type, peer?, sender?, message?, context?, ... }] }
 
 // Encoding — parity with offline mode's human-readable codec
 NexTalk.encoding.toProquint(base64)    // -> { proquint: "lusab-babad-..." }
@@ -232,12 +241,29 @@ NexTalk.sessions.fingerprint(peerId) // -> { fingerprint }             proquint 
 // ciphertext via their existing 1:1 session with the sender.
 NexTalk.context.createContext(name)              // -> { context_id, display_name, version, creator_id }
 NexTalk.context.list()                           // -> [{ context_id, display_name, version, creator_id }, ...]
+NexTalk.context.show(contextId)                  // -> { context_id, display_name, version, creator_id, members: [{ peer_id, policy }] }
+NexTalk.context.rename(contextId, newName)       // -> { context_id, display_name, version }   creator only, bumps signed version
 NexTalk.context.addMember(contextId, peerId)     // -> { ok }
 NexTalk.context.excludeMember(contextId, peerId) // -> { ok }               local delivery exclusion
 NexTalk.context.includeMember(contextId, peerId) // -> { ok }               re-enable excluded member
+NexTalk.context.muteMember(contextId, peerId)    // -> { ok, policy }       deliver, but suppress locally
+NexTalk.context.blockMember(contextId, peerId)   // -> { ok, policy }       no deliveries at all
+NexTalk.context.removeMember(contextId, peerId)  // -> { ok }               delete the local policy entry (NOT revocation)
 NexTalk.context.listMembers(contextId)           // -> [{ peer_id, policy }, ...]
 NexTalk.context.sendMulti(contextId, message)    // -> { message_id, deliveries: [{ recipient, status, error }], sent, pending, failed }
 NexTalk.context.getEffectiveRecipients(contextId) // -> [peer_id, ...]
+NexTalk.context.drop(contextId)                  // -> { ok }               delete locally; other members keep theirs
+
+// Group receive — NexTalk.relay.listen() dispatches multi-message
+// deliveries (envelope type 4) automatically and returns:
+//
+//   { type: "group_message", sender, context_id, context,
+//     message, encoding: "utf-8" | "base64", message_id }
+//
+// `context` is the creator-signed display name learned from the message
+// itself (falling back to "group:<short id>" for unknown groups); duplicate
+// redeliveries are deduped inside the bridge. This mirrors
+// `nextalk worker listen`'s group_message event one-to-one.
 
 // Misc
 NexTalk.version()                // -> { version, api }               build tag + JS-surface revision

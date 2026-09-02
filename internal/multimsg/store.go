@@ -2,11 +2,17 @@
 package multimsg
 
 import (
-	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"sync"
+
+	"github.com/erfanheydarzade/NexTalk/internal/binstore"
+	"github.com/erfanheydarzade/nanopack"
 )
 
 // MemoryContextStore is an in-memory implementation of ContextStore for testing.
@@ -38,7 +44,8 @@ func (s *MemoryContextStore) LoadContext(id ContextID) (*MessageContext, error) 
 	if !ok {
 		return nil, ErrContextNotFound
 	}
-	return ctx, nil
+	cp := *ctx // never hand out the internal pointer — callers mutate freely
+	return &cp, nil
 }
 
 func (s *MemoryContextStore) ListContexts() ([]*MessageContext, error) {
@@ -46,9 +53,22 @@ func (s *MemoryContextStore) ListContexts() ([]*MessageContext, error) {
 	defer s.mu.RUnlock()
 	out := make([]*MessageContext, 0, len(s.contexts))
 	for _, ctx := range s.contexts {
-		out = append(out, ctx)
+		cp := *ctx
+		out = append(out, &cp)
 	}
+	sortContexts(out)
 	return out, nil
+}
+
+// sortContexts orders contexts deterministically (by ID) so listings and
+// scripted output never depend on map iteration order.
+func sortContexts(ctxs []*MessageContext) {
+	sort.Slice(ctxs, func(i, j int) bool { return ctxs[i].ContextID < ctxs[j].ContextID })
+}
+
+// sortPolicies orders policies deterministically (by recipient).
+func sortPolicies(pols []*LocalRecipientPolicy) {
+	sort.Slice(pols, func(i, j int) bool { return pols[i].Recipient < pols[j].Recipient })
 }
 
 func (s *MemoryContextStore) DeleteContext(id ContextID) error {
@@ -94,6 +114,7 @@ func (s *MemoryContextStore) ListPolicies(contextID ContextID) ([]*LocalRecipien
 	for _, p := range ctxPolicies {
 		out = append(out, p)
 	}
+	sortPolicies(out)
 	return out, nil
 }
 
@@ -201,178 +222,253 @@ func (s *MemoryDeliveryStore) MarkDelivered(id DeliveryID) error {
 	return nil
 }
 
-// Common errors
-var (
-	ErrContextNotFound  = &multimsgError{"context not found"}
-	ErrPolicyNotFound   = &multimsgError{"policy not found"}
-	ErrDeliveryNotFound = &multimsgError{"delivery not found"}
-	ErrDeliveryPending  = &multimsgError{"delivery pending (no ciphertext yet)"}
-)
-
-type multimsgError struct {
-	msg string
-}
-
-func (e *multimsgError) Error() string {
-	return e.msg
-}
-
-// JSONContextStore provides file-based persistence using JSON.
-// This is a simple implementation for CLI/offline use.
+// -- File-backed stores (nanopack binary via internal/binstore) ----------------
 //
-// SECURITY NOTE: This is NOT production-grade crash-safe storage. It uses
-// simple write-to-file semantics without atomic rename, WAL, or fsync.
-// A crash during write may corrupt the file. For production use, replace
-// with SQLite or an append-only log with checksums.
-type JSONContextStore struct {
+// Contexts, policies and deliveries persist per identity as CRC-framed
+// nanopack record files (<id>.contexts.np / <id>.policies.np /
+// <id>.deliveries.np). The pre-nanopack *.json layouts remain readable for
+// one-time migration; every write goes to the .np file.
+
+// OpenIdentityStores opens the standard per-identity context/policy and
+// delivery stores. Every caller — shell init/load, CLI commands, listen
+// dispatch — uses this one constructor so the file layout has a single
+// definition point.
+func OpenIdentityStores(identityID string) (ContextStore, DeliveryStore, error) {
+	ctxStore, err := NewFileContextStore(
+		identityID+".contexts.json",
+		identityID+".policies.json",
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	deliveryStore, err := NewFileDeliveryStore(identityID + ".deliveries.json")
+	if err != nil {
+		return nil, nil, err
+	}
+	return ctxStore, deliveryStore, nil
+}
+
+// policyBin is the nanopack record shape of a LocalRecipientPolicy.
+//
+//nanopack:schema id=44
+type policyBin struct {
+	ContextID string `bin:"1"`
+	Recipient string `bin:"2"`
+	Policy    uint8  `bin:"3"`
+	UpdatedAt uint64 `bin:"4"`
+}
+
+func (p *policyBin) MarshalBinID(e *nanopack.Encoder) error {
+	e.AddID(1, []byte(p.ContextID))
+	e.AddID(2, []byte(p.Recipient))
+	e.AddID(3, []byte{p.Policy})
+	var ts [8]byte
+	binary.BigEndian.PutUint64(ts[:], p.UpdatedAt)
+	e.AddID(4, ts[:])
+	return nil
+}
+
+func (p *policyBin) UnmarshalBinID(fields []nanopack.FieldID) error {
+	for _, f := range fields {
+		switch f.ID {
+		case 1:
+			p.ContextID = string(f.Data)
+		case 2:
+			p.Recipient = string(f.Data)
+		case 3:
+			if len(f.Data) == 1 {
+				p.Policy = f.Data[0]
+			}
+		case 4:
+			if len(f.Data) == 8 {
+				p.UpdatedAt = binary.BigEndian.Uint64(f.Data)
+			}
+		}
+	}
+	return nil
+}
+
+func policyToRecord(p *LocalRecipientPolicy) ([]byte, error) {
+	return nanopack.MarshalFastID(&policyBin{
+		ContextID: string(p.ContextID),
+		Recipient: p.Recipient,
+		Policy:    uint8(p.Policy),
+		UpdatedAt: uint64(p.UpdatedAt),
+	})
+}
+
+func policyFromRecord(rec []byte) (*LocalRecipientPolicy, error) {
+	var pb policyBin
+	if err := nanopack.UnmarshalFastID(rec, &pb); err != nil {
+		return nil, err
+	}
+	return &LocalRecipientPolicy{
+		ContextID: ContextID(pb.ContextID),
+		Recipient: pb.Recipient,
+		Policy:    RecipientPolicy(pb.Policy),
+		UpdatedAt: int64(pb.UpdatedAt),
+	}, nil
+}
+
+// npPath maps a legacy ".json" path to its nanopack successor.
+func npPath(path string) string {
+	return strings.TrimSuffix(path, ".json") + ".np"
+}
+
+// FileContextStore persists contexts and local recipient policies.
+type FileContextStore struct {
 	mu           sync.RWMutex
-	contextsFile string
+	contextsFile string // .np path; the given path is kept as legacy source
 	policiesFile string
 	contexts     map[ContextID]*MessageContext
 	policies     map[ContextID]map[string]*LocalRecipientPolicy
 }
 
-// NewJSONContextStore creates a new JSON-backed context store.
-func NewJSONContextStore(contextsFile, policiesFile string) (*JSONContextStore, error) {
-	s := &JSONContextStore{
-		contextsFile: contextsFile,
-		policiesFile: policiesFile,
+// NewFileContextStore creates a context store backed by nanopack files.
+// The arguments are the historical ".json" paths; data now lives at the
+// corresponding ".np" paths and the old files are READ once for migration.
+func NewFileContextStore(contextsFile, policiesFile string) (*FileContextStore, error) {
+	s := &FileContextStore{
+		contextsFile: npPath(contextsFile),
+		policiesFile: npPath(policiesFile),
 		contexts:     make(map[ContextID]*MessageContext),
 		policies:     make(map[ContextID]map[string]*LocalRecipientPolicy),
 	}
-	if err := s.load(); err != nil {
+	if err := s.load(contextsFile, policiesFile); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// jsonContext is the serializable form of MessageContext.
-type jsonContext struct {
-	ContextID       string `json:"context_id"`
-	DisplayName     string `json:"display_name"`
-	MetadataVersion uint64 `json:"metadata_version"`
-	CreatorID       string `json:"creator_id"`
-	Signature       string `json:"signature"` // base64
+// Deprecated: use NewFileContextStore.
+func NewJSONContextStore(contextsFile, policiesFile string) (*FileContextStore, error) {
+	return NewFileContextStore(contextsFile, policiesFile)
 }
 
-func ctxToJSON(ctx *MessageContext) jsonContext {
-	return jsonContext{
-		ContextID:       string(ctx.ContextID),
-		DisplayName:     ctx.DisplayName,
-		MetadataVersion: ctx.MetadataVersion,
-		CreatorID:       ctx.CreatorID,
-		Signature:       base64.StdEncoding.EncodeToString(ctx.Signature),
-	}
-}
-
-func ctxFromJSON(j jsonContext) (*MessageContext, error) {
-	sig, err := base64.StdEncoding.DecodeString(j.Signature)
-	if err != nil {
-		return nil, fmt.Errorf("decode signature: %w", err)
-	}
-	return &MessageContext{
-		ContextID:       ContextID(j.ContextID),
-		DisplayName:     j.DisplayName,
-		MetadataVersion: j.MetadataVersion,
-		CreatorID:       j.CreatorID,
-		Signature:       sig,
-	}, nil
-}
-
-func (s *JSONContextStore) load() error {
+// loadContextsRecords reads contexts+policy records from .np files, falling
+// back to the legacy JSON files for a one-time migration.
+func (s *FileContextStore) load(legacyContextsFile, legacyPoliciesFile string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Load contexts
-	if data, err := os.ReadFile(s.contextsFile); err == nil {
-		var contexts []jsonContext
-		if err := json.Unmarshal(data, &contexts); err != nil {
-			return fmt.Errorf("parse contexts file: %w", err)
-		}
-		for _, j := range contexts {
-			ctx, err := ctxFromJSON(j)
-			if err != nil {
-				// Skip corrupted entries but log
+	ctxLoaded := false
+	if records, err := binstore.Load(s.contextsFile, MessageContextSchemaID); err == nil {
+		for _, rec := range records {
+			ctx := &MessageContext{}
+			if nanopack.UnmarshalFastID(rec, ctx) != nil || ctx.MetadataVersion == 0 {
 				continue
-			}
-			// Validate version
-			if ctx.MetadataVersion == 0 {
-				continue // Skip invalid
 			}
 			s.contexts[ctx.ContextID] = ctx
 		}
+		ctxLoaded = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", s.contextsFile, err)
 	}
 
-	// Load policies
-	if data, err := os.ReadFile(s.policiesFile); err == nil {
-		var policies []jsonPolicy
-		if err := json.Unmarshal(data, &policies); err != nil {
-			return fmt.Errorf("parse policies file: %w", err)
-		}
-		for _, j := range policies {
-			if s.policies[ContextID(j.ContextID)] == nil {
-				s.policies[ContextID(j.ContextID)] = make(map[string]*LocalRecipientPolicy)
+	polLoaded := false
+	if records, err := binstore.Load(s.policiesFile, PolicySchemaID); err == nil {
+		for _, rec := range records {
+			pol, err := policyFromRecord(rec)
+			if err != nil {
+				continue
 			}
-			s.policies[ContextID(j.ContextID)][j.Recipient] = &LocalRecipientPolicy{
-				ContextID: ContextID(j.ContextID),
-				Recipient: j.Recipient,
-				Policy:    RecipientPolicy(j.Policy),
-				UpdatedAt: j.UpdatedAt,
+			s.insertPolicyLocked(pol)
+		}
+		polLoaded = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", s.policiesFile, err)
+	}
+
+	if ctxLoaded && polLoaded {
+		return nil
+	}
+
+	// Legacy migration from the original JSON layout.
+	if !ctxLoaded {
+		if data, err := os.ReadFile(legacyContextsFile); err == nil {
+			var raw []struct {
+				ContextID       string `json:"context_id"`
+				DisplayName     string `json:"display_name"`
+				MetadataVersion uint64 `json:"metadata_version"`
+				CreatorID       string `json:"creator_id"`
+				Signature       []byte `json:"signature"`
+			}
+			if json.Unmarshal(data, &raw) == nil {
+				for _, j := range raw {
+					if j.MetadataVersion == 0 {
+						continue
+					}
+					ctx := &MessageContext{
+						ContextID:       ContextID(j.ContextID),
+						DisplayName:     j.DisplayName,
+						MetadataVersion: j.MetadataVersion,
+						CreatorID:       j.CreatorID,
+						Signature:       j.Signature,
+					}
+					s.contexts[ctx.ContextID] = ctx
+				}
 			}
 		}
 	}
-
+	if !polLoaded {
+		if data, err := os.ReadFile(legacyPoliciesFile); err == nil {
+			var raw []struct {
+				ContextID string `json:"context_id"`
+				Recipient string `json:"recipient"`
+				Policy    int    `json:"policy"`
+				UpdatedAt int64  `json:"updated_at"`
+			}
+			if json.Unmarshal(data, &raw) == nil {
+				for _, j := range raw {
+					s.insertPolicyLocked(&LocalRecipientPolicy{
+						ContextID: ContextID(j.ContextID),
+						Recipient: j.Recipient,
+						Policy:    RecipientPolicy(j.Policy),
+						UpdatedAt: j.UpdatedAt,
+					})
+				}
+			}
+		}
+	}
+	_ = s.saveLocked()
 	return nil
 }
 
-func (s *JSONContextStore) save() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *FileContextStore) insertPolicyLocked(p *LocalRecipientPolicy) {
+	if s.policies[p.ContextID] == nil {
+		s.policies[p.ContextID] = make(map[string]*LocalRecipientPolicy)
+	}
+	s.policies[p.ContextID][p.Recipient] = p
+}
 
-	// Save contexts
-	contexts := make([]jsonContext, 0, len(s.contexts))
+// saveLocked writes both files. Caller holds s.mu (any lock level).
+func (s *FileContextStore) saveLocked() error {
+	contexts := make([][]byte, 0, len(s.contexts))
 	for _, ctx := range s.contexts {
-		contexts = append(contexts, ctxToJSON(ctx))
-	}
-	if data, err := json.MarshalIndent(contexts, "", "  "); err == nil {
-		// Write to temp file first, then rename for atomicity
-		tmpFile := s.contextsFile + ".tmp"
-		if err := os.WriteFile(tmpFile, data, 0600); err == nil {
-			os.Rename(tmpFile, s.contextsFile)
+		rec, err := nanopack.MarshalFastID(ctx)
+		if err != nil {
+			return err
 		}
+		contexts = append(contexts, rec)
+	}
+	if err := binstore.Save(s.contextsFile, MessageContextSchemaID, contexts); err != nil {
+		return err
 	}
 
-	// Save policies
-	policies := make([]jsonPolicy, 0)
-	for ctxID, pols := range s.policies {
-		for recipient, pol := range pols {
-			policies = append(policies, jsonPolicy{
-				ContextID: string(ctxID),
-				Recipient: recipient,
-				Policy:    int(pol.Policy),
-				UpdatedAt: pol.UpdatedAt,
-			})
+	policies := make([][]byte, 0, 16)
+	for _, pols := range s.policies {
+		for _, p := range pols {
+			rec, err := policyToRecord(p)
+			if err != nil {
+				return err
+			}
+			policies = append(policies, rec)
 		}
 	}
-	if data, err := json.MarshalIndent(policies, "", "  "); err == nil {
-		tmpFile := s.policiesFile + ".tmp"
-		if err := os.WriteFile(tmpFile, data, 0600); err == nil {
-			os.Rename(tmpFile, s.policiesFile)
-		}
-	}
-
-	return nil
+	return binstore.Save(s.policiesFile, PolicySchemaID, policies)
 }
 
-// jsonPolicy is the serializable form of LocalRecipientPolicy.
-type jsonPolicy struct {
-	ContextID string `json:"context_id"`
-	Recipient string `json:"recipient"`
-	Policy    int    `json:"policy"`
-	UpdatedAt int64  `json:"updated_at"`
-}
-
-func (s *JSONContextStore) SaveContext(ctx *MessageContext) error {
+func (s *FileContextStore) SaveContext(ctx *MessageContext) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -384,52 +480,50 @@ func (s *JSONContextStore) SaveContext(ctx *MessageContext) error {
 		}
 	}
 
-	s.contexts[ctx.ContextID] = ctx
-	s.mu.Unlock()
-	err := s.save()
-	s.mu.Lock()
-	return err
+	cp := *ctx
+	s.contexts[cp.ContextID] = &cp
+	return s.saveLocked()
 }
 
-func (s *JSONContextStore) LoadContext(id ContextID) (*MessageContext, error) {
+func (s *FileContextStore) LoadContext(id ContextID) (*MessageContext, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ctx, ok := s.contexts[id]
 	if !ok {
 		return nil, ErrContextNotFound
 	}
-	return ctx, nil
+	cp := *ctx // never hand out the internal pointer � callers mutate freely
+	return &cp, nil
 }
 
-func (s *JSONContextStore) ListContexts() ([]*MessageContext, error) {
+func (s *FileContextStore) ListContexts() ([]*MessageContext, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*MessageContext, 0, len(s.contexts))
 	for _, ctx := range s.contexts {
-		out = append(out, ctx)
+		cp := *ctx
+		out = append(out, &cp)
 	}
 	return out, nil
 }
 
-func (s *JSONContextStore) DeleteContext(id ContextID) error {
+func (s *FileContextStore) DeleteContext(id ContextID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.contexts, id)
 	delete(s.policies, id)
-	return s.save()
+	return s.saveLocked()
 }
 
-func (s *JSONContextStore) SavePolicy(policy *LocalRecipientPolicy) error {
+func (s *FileContextStore) SavePolicy(policy *LocalRecipientPolicy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.policies[policy.ContextID] == nil {
-		s.policies[policy.ContextID] = make(map[string]*LocalRecipientPolicy)
-	}
-	s.policies[policy.ContextID][policy.Recipient] = policy
-	return s.save()
+	cp := *policy
+	s.insertPolicyLocked(&cp)
+	return s.saveLocked()
 }
 
-func (s *JSONContextStore) LoadPolicy(contextID ContextID, recipient string) (*LocalRecipientPolicy, error) {
+func (s *FileContextStore) LoadPolicy(contextID ContextID, recipient string) (*LocalRecipientPolicy, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ctxPolicies, ok := s.policies[contextID]
@@ -440,10 +534,11 @@ func (s *JSONContextStore) LoadPolicy(contextID ContextID, recipient string) (*L
 	if !ok {
 		return nil, ErrPolicyNotFound
 	}
-	return policy, nil
+	cp := *policy
+	return &cp, nil
 }
 
-func (s *JSONContextStore) ListPolicies(contextID ContextID) ([]*LocalRecipientPolicy, error) {
+func (s *FileContextStore) ListPolicies(contextID ContextID) ([]*LocalRecipientPolicy, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ctxPolicies, ok := s.policies[contextID]
@@ -452,156 +547,136 @@ func (s *JSONContextStore) ListPolicies(contextID ContextID) ([]*LocalRecipientP
 	}
 	out := make([]*LocalRecipientPolicy, 0, len(ctxPolicies))
 	for _, p := range ctxPolicies {
-		out = append(out, p)
+		cp := *p
+		out = append(out, &cp)
 	}
+	sortPolicies(out)
 	return out, nil
 }
 
-func (s *JSONContextStore) DeletePolicy(contextID ContextID, recipient string) error {
+func (s *FileContextStore) DeletePolicy(contextID ContextID, recipient string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctxPolicies, ok := s.policies[contextID]; ok {
 		delete(ctxPolicies, recipient)
 	}
-	return s.save()
+	return s.saveLocked()
 }
 
-// JSONDeliveryStore provides file-based persistence for deliveries.
-//
-// SECURITY NOTE: This is NOT production-grade crash-safe storage. See
-// JSONContextStore for the same limitations.
-type JSONDeliveryStore struct {
+// FileDeliveryStore persists multi-message deliveries.
+type FileDeliveryStore struct {
 	mu             sync.RWMutex
-	deliveriesFile string
+	deliveriesFile string // .np path; the given path is kept as legacy source
 	deliveries     map[DeliveryID]*MessageDelivery
 	byMessage      map[MessageID][]DeliveryID
 	byRecipient    map[string][]DeliveryID
 }
 
-// NewJSONDeliveryStore creates a new JSON-backed delivery store.
-func NewJSONDeliveryStore(deliveriesFile string) (*JSONDeliveryStore, error) {
-	s := &JSONDeliveryStore{
-		deliveriesFile: deliveriesFile,
+// NewFileDeliveryStore creates a delivery store backed by a nanopack file.
+func NewFileDeliveryStore(deliveriesFile string) (*FileDeliveryStore, error) {
+	s := &FileDeliveryStore{
+		deliveriesFile: npPath(deliveriesFile),
 		deliveries:     make(map[DeliveryID]*MessageDelivery),
 		byMessage:      make(map[MessageID][]DeliveryID),
 		byRecipient:    make(map[string][]DeliveryID),
 	}
-	if err := s.load(); err != nil {
-		return nil, err
+
+	records, err := binstore.Load(s.deliveriesFile, MessageDeliverySchemaID)
+	switch {
+	case err == nil:
+		for _, rec := range records {
+			d := &MessageDelivery{}
+			if nanopack.UnmarshalFastID(rec, d) != nil {
+				continue
+			}
+			s.indexLocked(d)
+		}
+		return s, nil
+	case errors.Is(err, os.ErrNotExist):
+		// fall through to legacy migration
+	default:
+		return nil, fmt.Errorf("read %s: %w", s.deliveriesFile, err)
+	}
+
+	if data, err := os.ReadFile(deliveriesFile); err == nil {
+		var raw []struct {
+			DeliveryID string `json:"delivery_id"`
+			MessageID  string `json:"message_id"`
+			Recipient  string `json:"recipient"`
+			ChannelID  string `json:"channel_id"`
+			Ciphertext []byte `json:"ciphertext"`
+			ContextID  string `json:"context_id"`
+			Timestamp  int64  `json:"timestamp"`
+		}
+		if json.Unmarshal(data, &raw) == nil {
+			for _, j := range raw {
+				s.indexLocked(&MessageDelivery{
+					DeliveryID: DeliveryID(j.DeliveryID),
+					MessageID:  MessageID(j.MessageID),
+					Recipient:  j.Recipient,
+					ChannelID:  j.ChannelID,
+					Ciphertext: j.Ciphertext,
+					ContextID:  ContextID(j.ContextID),
+					Timestamp:  j.Timestamp,
+				})
+			}
+		}
+		_ = s.saveLocked()
 	}
 	return s, nil
 }
 
-// jsonDelivery is the serializable form of MessageDelivery.
-type jsonDelivery struct {
-	DeliveryID string `json:"delivery_id"`
-	MessageID  string `json:"message_id"`
-	Recipient  string `json:"recipient"`
-	ChannelID  string `json:"channel_id"`
-	Ciphertext string `json:"ciphertext"` // base64
-	ContextID  string `json:"context_id"`
-	Timestamp  int64  `json:"timestamp"`
+// Deprecated: use NewFileDeliveryStore.
+func NewJSONDeliveryStore(deliveriesFile string) (*FileDeliveryStore, error) {
+	return NewFileDeliveryStore(deliveriesFile)
 }
 
-func deliveryToJSON(d *MessageDelivery) jsonDelivery {
-	return jsonDelivery{
-		DeliveryID: string(d.DeliveryID),
-		MessageID:  string(d.MessageID),
-		Recipient:  d.Recipient,
-		ChannelID:  d.ChannelID,
-		Ciphertext: base64.StdEncoding.EncodeToString(d.Ciphertext),
-		ContextID:  string(d.ContextID),
-		Timestamp:  d.Timestamp,
-	}
-}
-
-func deliveryFromJSON(j jsonDelivery) (*MessageDelivery, error) {
-	var ciphertext []byte
-	if j.Ciphertext != "" {
-		var err error
-		ciphertext, err = base64.StdEncoding.DecodeString(j.Ciphertext)
-		if err != nil {
-			return nil, fmt.Errorf("decode ciphertext: %w", err)
-		}
-	}
-	return &MessageDelivery{
-		DeliveryID: DeliveryID(j.DeliveryID),
-		MessageID:  MessageID(j.MessageID),
-		Recipient:  j.Recipient,
-		ChannelID:  j.ChannelID,
-		Ciphertext: ciphertext,
-		ContextID:  ContextID(j.ContextID),
-		Timestamp:  j.Timestamp,
-	}, nil
-}
-
-func (s *JSONDeliveryStore) load() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if data, err := os.ReadFile(s.deliveriesFile); err == nil {
-		var deliveries []jsonDelivery
-		if err := json.Unmarshal(data, &deliveries); err != nil {
-			return fmt.Errorf("parse deliveries file: %w", err)
-		}
-		for _, j := range deliveries {
-			d, err := deliveryFromJSON(j)
-			if err != nil {
-				continue // Skip corrupted entries
-			}
-			s.deliveries[d.DeliveryID] = d
-			s.byMessage[d.MessageID] = append(s.byMessage[d.MessageID], d.DeliveryID)
-			s.byRecipient[d.Recipient] = append(s.byRecipient[d.Recipient], d.DeliveryID)
-		}
-	}
-
-	return nil
-}
-
-func (s *JSONDeliveryStore) save() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	deliveries := make([]jsonDelivery, 0, len(s.deliveries))
-	for _, d := range s.deliveries {
-		deliveries = append(deliveries, deliveryToJSON(d))
-	}
-	if data, err := json.MarshalIndent(deliveries, "", "  "); err == nil {
-		tmpFile := s.deliveriesFile + ".tmp"
-		if err := os.WriteFile(tmpFile, data, 0600); err == nil {
-			os.Rename(tmpFile, s.deliveriesFile)
-		}
-	}
-
-	return nil
-}
-
-func (s *JSONDeliveryStore) SaveDelivery(d *MessageDelivery) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check for duplicate delivery ID
+func (s *FileDeliveryStore) indexLocked(d *MessageDelivery) {
 	if _, exists := s.deliveries[d.DeliveryID]; exists {
-		return fmt.Errorf("duplicate delivery ID: %s", d.DeliveryID)
+		return
 	}
-
 	s.deliveries[d.DeliveryID] = d
 	s.byMessage[d.MessageID] = append(s.byMessage[d.MessageID], d.DeliveryID)
 	s.byRecipient[d.Recipient] = append(s.byRecipient[d.Recipient], d.DeliveryID)
-	return s.save()
 }
 
-func (s *JSONDeliveryStore) LoadDelivery(id DeliveryID) (*MessageDelivery, error) {
+func (s *FileDeliveryStore) saveLocked() error {
+	records := make([][]byte, 0, len(s.deliveries))
+	for _, d := range s.deliveries {
+		rec, err := nanopack.MarshalFastID(d)
+		if err != nil {
+			return err
+		}
+		records = append(records, rec)
+	}
+	return binstore.Save(s.deliveriesFile, MessageDeliverySchemaID, records)
+}
+
+func (s *FileDeliveryStore) SaveDelivery(d *MessageDelivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.deliveries[d.DeliveryID]; exists {
+		return fmt.Errorf("duplicate delivery ID: %s", d.DeliveryID)
+	}
+	s.deliveries[d.DeliveryID] = d
+	s.byMessage[d.MessageID] = append(s.byMessage[d.MessageID], d.DeliveryID)
+	s.byRecipient[d.Recipient] = append(s.byRecipient[d.Recipient], d.DeliveryID)
+	return s.saveLocked()
+}
+
+func (s *FileDeliveryStore) LoadDelivery(id DeliveryID) (*MessageDelivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	d, ok := s.deliveries[id]
 	if !ok {
 		return nil, ErrDeliveryNotFound
 	}
-	return d, nil
+	cp := *d
+	return &cp, nil
 }
 
-func (s *JSONDeliveryStore) ListDeliveriesByMessage(msgID MessageID) ([]*MessageDelivery, error) {
+func (s *FileDeliveryStore) ListDeliveriesByMessage(msgID MessageID) ([]*MessageDelivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids, ok := s.byMessage[msgID]
@@ -611,13 +686,14 @@ func (s *JSONDeliveryStore) ListDeliveriesByMessage(msgID MessageID) ([]*Message
 	out := make([]*MessageDelivery, 0, len(ids))
 	for _, id := range ids {
 		if d, ok := s.deliveries[id]; ok {
-			out = append(out, d)
+			cp := *d
+			out = append(out, &cp)
 		}
 	}
 	return out, nil
 }
 
-func (s *JSONDeliveryStore) ListDeliveriesByRecipient(recipient string) ([]*MessageDelivery, error) {
+func (s *FileDeliveryStore) ListDeliveriesByRecipient(recipient string) ([]*MessageDelivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids, ok := s.byRecipient[recipient]
@@ -627,25 +703,27 @@ func (s *JSONDeliveryStore) ListDeliveriesByRecipient(recipient string) ([]*Mess
 	out := make([]*MessageDelivery, 0, len(ids))
 	for _, id := range ids {
 		if d, ok := s.deliveries[id]; ok {
-			out = append(out, d)
+			cp := *d
+			out = append(out, &cp)
 		}
 	}
 	return out, nil
 }
 
-func (s *JSONDeliveryStore) ListUndeliveredDeliveries() ([]*MessageDelivery, error) {
+func (s *FileDeliveryStore) ListUndeliveredDeliveries() ([]*MessageDelivery, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []*MessageDelivery
 	for _, d := range s.deliveries {
 		if d.Ciphertext == nil {
-			out = append(out, d)
+			cp := *d
+			out = append(out, &cp)
 		}
 	}
 	return out, nil
 }
 
-func (s *JSONDeliveryStore) MarkDelivered(id DeliveryID) error {
+func (s *FileDeliveryStore) MarkDelivered(id DeliveryID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.deliveries[id]
@@ -655,5 +733,31 @@ func (s *JSONDeliveryStore) MarkDelivered(id DeliveryID) error {
 	if d.Ciphertext == nil {
 		return ErrDeliveryPending
 	}
-	return s.save()
+	return s.saveLocked()
+}
+
+// -- Common errors & helpers --------------------------------------------------
+
+var (
+	ErrContextNotFound   = &multimsgError{"context not found"}
+	ErrPolicyNotFound    = &multimsgError{"policy not found"}
+	ErrDeliveryNotFound  = &multimsgError{"delivery not found"}
+	ErrDeliveryPending   = &multimsgError{"delivery pending (no ciphertext yet)"}
+	ErrDuplicateDelivery = &multimsgError{"duplicate delivery"}
+)
+
+type multimsgError struct {
+	msg string
+}
+
+func (e *multimsgError) Error() string {
+	return e.msg
+}
+
+// shortPeer truncates a peer/context ID for compact display or logs.
+func shortPeer(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

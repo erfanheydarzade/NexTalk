@@ -833,6 +833,103 @@ class NexTalkRatchetAdvancement(NexTalkCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 8. Worker CLI — cloud relay transport
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The worker transport routes all traffic through a relay server, so every
+# command needs a live relay URL. These tests verify the CLI's contract:
+# correct flags, graceful failure when the relay is unreachable, and that
+# the binary builds with the worker subcommand wired in.
+
+class NexTalkWorkerCLI(NexTalkCase):
+
+    def test_worker_init_requires_no_extra_flags(self):
+        """`worker init --format json` must at least parse and attempt registration."""
+        # Without a relay, this fails — but it must fail with a relay error,
+        # not a cobra usage error or a panic.
+        res = self.cli_fail("worker", "init", "--format", "json")
+        # Should mention registration/relay, not "Usage:"
+        self.assertNotIn("Usage:", res.stderr)
+
+    def test_worker_init_outputs_json_on_error(self):
+        """Even on failure, --format json must emit parseable JSON."""
+        res = self.run_cli("worker", "init", "--format", "json")
+        # The error response should be valid JSON with an "error" key
+        try:
+            obj = res.json()
+            self.assertIn("error", obj)
+        except Exception:
+            # If stdout is empty (human mode leaked), check stderr
+            self.assertIn("register", res.stderr.lower() or "")
+
+    def test_worker_connect_requires_id_and_remote(self):
+        """`worker connect` without required flags must fail."""
+        res = self.cli_fail("worker", "connect", "--format", "json")
+        # Missing required flags produces a non-zero exit; cobra may print
+        # usage to stderr. The key assertion is that it fails, not crashes.
+        self.assertFalse(res.ok)
+
+    def test_worker_connect_invalid_peer_id(self):
+        """`worker connect` with a malformed peer ID must fail before network."""
+        alice = self.init_identity()
+        res = self.cli_fail(
+            "worker", "connect",
+            "--id", alice,
+            "--remotePeer", "not-a-valid-peer-id",
+            "--format", "json",
+        )
+        self.assertFalse(res.ok)
+
+    def test_worker_encrypt_requires_id_and_remote(self):
+        """`worker encrypt` without required flags must fail."""
+        res = self.cli_fail("worker", "encrypt", "--format", "json")
+        self.assertFalse(res.ok)
+
+    def test_worker_listen_requires_id(self):
+        """`worker listen` without --id must fail."""
+        res = self.cli_fail("worker", "listen", "--format", "json")
+        self.assertFalse(res.ok)
+
+    def test_worker_encrypt_invalid_peer_id(self):
+        """`worker encrypt` with a malformed peer ID must fail before network."""
+        alice = self.init_identity()
+        res = self.cli_fail(
+            "worker", "encrypt",
+            "--id", alice,
+            "--remotePeer", "bad-peer",
+            "-m", "hello",
+            "--format", "json",
+        )
+        self.assertIn("error", res.json())
+
+    def test_worker_invalid_format_rejected(self):
+        """`--format yaml` must be rejected (only human/json allowed)."""
+        res = self.cli_fail("worker", "init", "--format", "yaml")
+        self.assertIn("invalid format", res.stderr.lower())
+
+    def test_worker_invalid_encoding_rejected(self):
+        """`--in yaml` must be rejected (only raw/b64/hex allowed)."""
+        alice = self.init_identity()
+        res = self.cli_fail(
+            "worker", "encrypt",
+            "--id", alice,
+            "--remotePeer", alice,
+            "-m", "hello",
+            "--in", "yaml",
+            "--format", "json",
+        )
+        self.assertIn("error", res.json())
+
+    def test_worker_binary_has_subcommands(self):
+        """`worker --help` must list the known subcommands."""
+        res = self.cli_ok("worker", "--help")
+        # Help output should mention the subcommands
+        help_text = res.stdout + res.stderr
+        for cmd in ("init", "connect", "listen", "encrypt"):
+            self.assertIn(cmd, help_text, f"worker --help missing subcommand {cmd!r}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 

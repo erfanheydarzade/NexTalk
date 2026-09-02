@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -136,8 +135,11 @@ func RunWorker(api *core.Engine, workerURL string) {
 
 				switch t {
 				case relay.TypeOffer:
-					var offer core.HandShakeOffer
-					_ = json.Unmarshal(data, &offer)
+					offer, err := core.DecodeOffer(data)
+					if err != nil {
+						fmt.Println("[-] bad offer payload:", err)
+						continue
+					}
 
 					ansBytes, err := activeClient.AcceptOffer(data)
 					if err != nil {

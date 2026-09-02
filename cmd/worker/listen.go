@@ -5,12 +5,15 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
+	"github.com/erfanheydarzade/NexTalk/crypto"
+	"github.com/erfanheydarzade/NexTalk/internal/mailbox"
+	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"github.com/spf13/cobra"
@@ -59,6 +62,8 @@ func (c *Command) RunListen(ctx context.Context, localPeer string, format string
 		return fmt.Errorf("load session: %w", err)
 	}
 
+	deps := newListenDeps(cl, r)
+
 	msgs, err := r.Receive(ctx, cl.IdentityPrivate)
 	if err != nil {
 		return fmt.Errorf("receive: %w", err)
@@ -76,6 +81,7 @@ func (c *Command) RunListen(ctx context.Context, localPeer string, format string
 			r,
 			cl.IdentityPrivate,
 			msg.Body,
+			deps,
 		)
 		if err != nil {
 			// Collect dispatch errors as events rather than aborting the loop,
@@ -116,13 +122,41 @@ func printListenEventsHuman(events []ListenEvent) {
 		case "answer":
 			fmt.Printf("[+] Session established with %s\n", e.Peer)
 		case "message":
-			fmt.Printf("[+] Message from %s (%s):\n%s\n", e.Sender, e.Encoding, e.Message)
+			fmt.Printf("[+] Message from %s (%s) — stored in mailbox:\n%s\n", e.Sender, e.Encoding, e.Message)
+		case "group_message":
+			fmt.Printf("[+] Group message in [%s] from %s — stored in mailbox:\n%s\n",
+				e.Context, e.Sender, e.Message)
 		case "error":
 			fmt.Printf("[✗] %s\n", e.Message)
 		default:
 			fmt.Printf("[?] Unknown event: %s\n", e.Type)
 		}
 	}
+}
+
+// listenDeps carries the persistent stores a dispatched envelope is recorded
+// into. Both fields degrade gracefully to nil (listen still prints events,
+// it just cannot persist them).
+type listenDeps struct {
+	store  *mailbox.Store
+	fanout *multimsg.Fanout
+}
+
+// newListenDeps opens the identity's persistent mailbox and wires a fanout
+// over file-backed context/delivery stores, mirroring what the interactive
+// shell does — so CLI-received messages land in exactly the same history.
+func newListenDeps(cl *Client.Client, r relay.Relay) *listenDeps {
+	d := &listenDeps{}
+	if st, err := mailbox.Load(cl.Id); err == nil {
+		d.store = st
+	}
+	ctxStore, deliveryStore, err := multimsg.OpenIdentityStores(cl.Id)
+	if err != nil {
+		ctxStore = multimsg.NewMemoryContextStore()
+		deliveryStore = multimsg.NewMemoryDeliveryStore()
+	}
+	d.fanout = multimsg.NewFanout(cl, r, ctxStore, deliveryStore, multimsg.DefaultFanoutConfig())
+	return d
 }
 
 // dispatch routes an incoming raw envelope body and returns a single ListenEvent.
@@ -133,6 +167,7 @@ func dispatch(
 	r relay.Relay,
 	selfPriv ed25519.PrivateKey,
 	body []byte,
+	deps *listenDeps,
 ) (*ListenEvent, error) {
 
 	t, data, err := workerrelay.UnwrapEnvelope(body)
@@ -148,7 +183,10 @@ func dispatch(
 		return handleAnswer(cl, engine, data)
 
 	case relay.TypeMessage:
-		return handleMessage(cl, engine, data)
+		return handleMessage(cl, engine, data, deps)
+
+	case relay.TypeMultiMsg:
+		return handleMultiMessage(data, deps, cl.Id)
 
 	default:
 		return nil, fmt.Errorf("unknown envelope type: %d", t)
@@ -165,9 +203,9 @@ func handleOffer(
 
 ) (*ListenEvent, error) {
 
-	var offer core.HandShakeOffer
-	if err := json.Unmarshal(data, &offer); err != nil {
-		return nil, fmt.Errorf("unmarshal offer: %w", err)
+	offer, err := core.DecodeOffer(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode offer: %w", err)
 	}
 
 	answerBytes, err := cl.AcceptOffer(data)
@@ -225,10 +263,15 @@ func handleMessage(
 	cl Client.Client,
 	engine *core.Engine,
 	data []byte,
+	deps *listenDeps,
 ) (*ListenEvent, error) {
 
 	senderID, plaintext, err := cl.Decrypt(data)
 	if err != nil {
+		if errors.Is(err, crypto.ErrReplay) {
+			// senderID is empty on failure — don't print a dangling prefix.
+			return nil, fmt.Errorf("incoming message %s", describeDecryptError(err))
+		}
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 
@@ -245,5 +288,60 @@ func handleMessage(
 		event.Message = base64.StdEncoding.EncodeToString(plaintext)
 	}
 
+	// Persist the message so it survives this process — the whole point of
+	// the shared mailbox store. Binary payloads are stored in their base64
+	// rendering, matching what was displayed.
+	if deps != nil && deps.store != nil {
+		if err := deps.store.AppendIncoming(senderID, event.Message); err != nil {
+			return event, fmt.Errorf("store incoming message: %w", err)
+		}
+	}
+
 	return event, nil
+}
+
+// handleMultiMessage processes a fan-out (group) delivery end to end:
+// decrypt against the 1:1 session, verify the binding, learn the group
+// metadata, dedupe, and record into the group thread.
+func handleMultiMessage(
+	data []byte,
+	deps *listenDeps,
+	selfID string,
+) (*ListenEvent, error) {
+
+	if deps == nil || deps.fanout == nil {
+		return nil, fmt.Errorf("group message received but fanout unavailable")
+	}
+
+	inbound, err := deps.fanout.ProcessDelivery(selfID, data)
+	if err != nil {
+		if errors.Is(err, multimsg.ErrDuplicateDelivery) {
+			// Already shown in a previous poll — stay silent, emit no event.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("group message %s", describeDecryptError(err))
+	}
+
+	body := string(inbound.Plaintext)
+	if !utf8.Valid(inbound.Plaintext) {
+		body = base64.StdEncoding.EncodeToString(inbound.Plaintext)
+	}
+
+	if deps.store != nil {
+		if err := deps.store.AppendGroupIncoming(
+			string(inbound.ContextID()),
+			inbound.DisplayName(),
+			inbound.Sender,
+			body,
+		); err != nil {
+			return nil, fmt.Errorf("store group message: %w", err)
+		}
+	}
+
+	return &ListenEvent{
+		Type:    "group_message",
+		Sender:  inbound.Sender,
+		Context: inbound.DisplayName(),
+		Message: body,
+	}, nil
 }

@@ -29,6 +29,8 @@ var (
 	Header = color.New(color.Bold, color.FgBlue)
 	// BoldCyan is bold cyan — used for the NexTalk CLI frame.
 	BoldCyan = color.New(color.Bold, color.FgCyan)
+	// Comment is dim gray — used for previews, timestamps, and footnotes.
+	Comment = color.New(color.FgHiBlack)
 )
 
 // ClearScreen clears the terminal via ANSI cursor/erase sequences.

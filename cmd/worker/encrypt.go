@@ -6,6 +6,7 @@ import (
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	codec "github.com/erfanheydarzade/NexTalk/internal/codec"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	"github.com/spf13/cobra"
 )
@@ -40,6 +41,11 @@ func (c *Command) EncryptCommand() *cobra.Command {
 				},
 			)
 			return reportAndExit(err, format)
+		},
+		// Tab completion for the -r slot: established peers + contact aliases.
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			return groupchat.FilterByPrefix(groupchat.PeerCandidates(flagString(cmd, "id")), toComplete),
+				cobra.ShellCompDirectiveNoFileComp
 		},
 	}
 

@@ -2,6 +2,7 @@ package offline
 
 import (
 	"github.com/erfanheydarzade/NexTalk/core"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +39,16 @@ func (c *Command) Root() *cobra.Command {
 		c.FinishCommand(),
 		c.EncryptCommand(),
 		c.DecryptCommand(),
+	)
+
+	// The group-chat standard surface — identical in every transport.
+	// Offline has no relay, so send-multi exports per-recipient transfer
+	// containers instead of transmitting.
+	cmd.AddCommand(
+		groupchat.ContextCLI(groupchat.CLIOptions{}),
+		groupchat.SendMultiCLI(groupchat.CLIOptions{}),
+		groupchat.ContextsCLI(groupchat.CLIOptions{}),
+		groupchat.MailboxCLI(groupchat.CLIOptions{}),
 	)
 
 	return cmd

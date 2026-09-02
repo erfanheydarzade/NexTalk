@@ -2,7 +2,6 @@ package offline
 
 import (
 	"bufio"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,9 @@ import (
 
 	"github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
-	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
+	"github.com/erfanheydarzade/NexTalk/internal/config"
+	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
+	"github.com/erfanheydarzade/NexTalk/internal/registry"
 	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
@@ -44,7 +45,6 @@ func envelopeData(env PayloadEnvelope) []byte {
 
 func RunOffline(api *core.Engine) {
 	scanner := bufio.NewScanner(os.Stdin)
-	_ = context.Background()
 
 	var activeClient *client.Client
 
@@ -207,26 +207,35 @@ func RunOffline(api *core.Engine) {
 		case "decrypt":
 			fmt.Print("package: ")
 			scanner.Scan()
-			envBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(scanner.Text()))
-			if err != nil {
-				fmt.Println("[-] invalid base64 package:", err)
-				continue
-			}
-
+			pasted := strings.TrimSpace(scanner.Text())
 			if activeClient == nil {
 				fmt.Println("[-] Please 'init' or 'load' an identity first.")
 				continue
 			}
-
+			st := replState(activeClient)
+			if ev, err := groupchat.Ingest(activeClient, st.MailboxStore, st.Fanout, []byte(pasted)); err == nil {
+				switch ev.Kind {
+				case "duplicate":
+					fmt.Println("[+] already ingested — ignoring duplicate")
+				case "group_message":
+					fmt.Printf("[+] group [%s] from %s\n[+] message: %s\n", ev.Context, ev.Sender, ev.Message)
+				default:
+					fmt.Printf("[+] sender: %s\n[+] message: %s\n", ev.Sender, ev.Message)
+				}
+				continue
+			}
+			envBytes, err := base64.StdEncoding.DecodeString(pasted)
+			if err != nil {
+				fmt.Println("[-] invalid base64 package:", err)
+				continue
+			}
 			senderID, plain, err := activeClient.Decrypt(envBytes)
 			if err != nil {
 				fmt.Println("[-] decrypt failed:", err)
 				continue
 			}
-
 			fmt.Printf("[+] sender: %s\n", senderID)
 			fmt.Printf("[+] message: %s\n", string(plain))
-
 		case "help":
 			fmt.Println("=== NexTalk (Offline Transport) ===")
 			fmt.Println("Commands:")
@@ -236,228 +245,27 @@ func RunOffline(api *core.Engine) {
 			fmt.Println("  accept                  Accept a handshake offer")
 			fmt.Println("  finish                  Complete a handshake")
 			fmt.Println("  encrypt <peer> <msg>    Encrypt a message")
-			fmt.Println("  decrypt                 Decrypt a message package")
-			fmt.Println("  context create <name>   Create a new message context")
-			fmt.Println("  context list            List all contexts")
-			fmt.Println("  context rename <id> <name>  Rename a context")
-			fmt.Println("  context add <ctx> <peer>    Add recipient to context")
-			fmt.Println("  context remove <ctx> <peer> Remove recipient from context")
-			fmt.Println("  context mute <ctx> <peer>   Mute recipient in context")
-			fmt.Println("  context block <ctx> <peer>  Block recipient in context")
-			fmt.Println("  context policy <ctx> <peer> <policy> Set recipient policy")
-			fmt.Println("  multisend <ctx> <peers...> <msg> Send multi-user message")
+			fmt.Println("  decrypt                 Decrypt a container / message package")
+			fmt.Println("  context create|list|show|rename|add|remove|include|mute|block|members")
+			fmt.Println("  send-multi <ctx> <msg>  Fan out a group message (exports containers)")
+			fmt.Println("  contexts                List contexts")
+			fmt.Println("  mailbox [peer|group]    Read stored conversations")
 			fmt.Println("  clear                   Clear the screen")
 			fmt.Println("  exit                    Quit")
-
-		case "context":
-			if len(parts) < 2 {
-				fmt.Println("usage: context <create|list|rename|add|remove|mute|block|policy> ...")
-				continue
-			}
-			subCmd := parts[1]
-			switch subCmd {
-			case "create":
-				if len(parts) < 3 {
-					fmt.Println("usage: context create <display_name>")
-					continue
-				}
-				displayName := strings.Join(parts[2:], " ")
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctx, err := fanout.CreateContext(displayName, activeClient.IdentityPrivate)
-				if err != nil {
-					fmt.Println("[-] context create failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Context created: %s (ID: %s)\n", ctx.DisplayName, ctx.ContextID)
-
-			case "list":
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxs, err := fanout.CtxStore.ListContexts()
-				if err != nil {
-					fmt.Println("[-] context list failed:", err)
-					continue
-				}
-				if len(ctxs) == 0 {
-					fmt.Println("[+] No contexts")
-					continue
-				}
-				fmt.Println("[+] Contexts:")
-				for _, c := range ctxs {
-					fmt.Printf("  %s  v%d  %s\n", c.ContextID, c.MetadataVersion, c.DisplayName)
-				}
-
-			case "rename":
-				if len(parts) < 4 {
-					fmt.Println("usage: context rename <context_id> <new_name>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				newName := strings.Join(parts[3:], " ")
-				ctx, err := fanout.UpdateContext(ctxID, newName, activeClient.IdentityPrivate)
-				if err != nil {
-					fmt.Println("[-] context rename failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Context renamed: %s (v%d)\n", ctx.DisplayName, ctx.MetadataVersion)
-
-			case "add":
-				if len(parts) < 4 {
-					fmt.Println("usage: context add <context_id> <peer_id>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				peerID := parts[3]
-				if err := fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyEnabled); err != nil {
-					fmt.Println("[-] context add failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Added %s to context %s\n", peerID, ctxID)
-
-			case "remove":
-				if len(parts) < 4 {
-					fmt.Println("usage: context remove <context_id> <peer_id>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				peerID := parts[3]
-				if err := fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyExcluded); err != nil {
-					fmt.Println("[-] context remove failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Removed %s from context %s (excluded)\n", peerID, ctxID)
-
-			case "mute":
-				if len(parts) < 4 {
-					fmt.Println("usage: context mute <context_id> <peer_id>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				peerID := parts[3]
-				if err := fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyMuted); err != nil {
-					fmt.Println("[-] context mute failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Muted %s in context %s\n", peerID, ctxID)
-
-			case "block":
-				if len(parts) < 4 {
-					fmt.Println("usage: context block <context_id> <peer_id>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				peerID := parts[3]
-				if err := fanout.SetRecipientPolicy(ctxID, peerID, multimsg.PolicyBlocked); err != nil {
-					fmt.Println("[-] context block failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Blocked %s in context %s\n", peerID, ctxID)
-
-			case "policy":
-				if len(parts) < 5 {
-					fmt.Println("usage: context policy <context_id> <peer_id> <enabled|muted|blocked|excluded>")
-					continue
-				}
-				if activeClient == nil {
-					fmt.Println("[-] Please 'init' or 'load' an identity first.")
-					continue
-				}
-				ctxStore := multimsg.NewMemoryContextStore()
-				fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-				ctxID := multimsg.ContextID(parts[2])
-				peerID := parts[3]
-				policyStr := parts[4]
-				var policy multimsg.RecipientPolicy
-				switch policyStr {
-				case "enabled":
-					policy = multimsg.PolicyEnabled
-				case "muted":
-					policy = multimsg.PolicyMuted
-				case "blocked":
-					policy = multimsg.PolicyBlocked
-				case "excluded":
-					policy = multimsg.PolicyExcluded
-				default:
-					fmt.Println("[-] invalid policy:", policyStr)
-					continue
-				}
-				if err := fanout.SetRecipientPolicy(ctxID, peerID, policy); err != nil {
-					fmt.Println("[-] context policy failed:", err)
-					continue
-				}
-				fmt.Printf("[+] Set policy for %s in context %s: %s\n", peerID, ctxID, policyStr)
-
-			default:
-				fmt.Println("[-] unknown context subcommand:", subCmd)
-			}
-
-		case "multisend":
-			if len(parts) < 4 {
-				fmt.Println("usage: multisend <context_id> <peer1,peer2,...> <message>")
-				continue
-			}
+		case "context", "send-multi", "multisend", "contexts", "mailbox":
 			if activeClient == nil {
 				fmt.Println("[-] Please 'init' or 'load' an identity first.")
 				continue
 			}
-			ctxStore := multimsg.NewMemoryContextStore()
-			fanout := multimsg.NewFanout(activeClient, nil, ctxStore, multimsg.NewMemoryDeliveryStore(), multimsg.DefaultFanoutConfig())
-			ctxID := multimsg.ContextID(parts[1])
-			peerList := strings.Split(parts[2], ",")
-			message := strings.Join(parts[3:], " ")
-			msg, err := fanout.SendMultiMessage(context.Background(), ctxID, []byte(message), peerList)
-			if err != nil {
-				fmt.Println("[-] multisend failed:", err)
-				continue
+			st := replState(activeClient)
+			args := parts[1:]
+			target := cmd
+			if cmd == "multisend" {
+				target = "send-multi" // deprecated alias
 			}
-			fmt.Printf("[+] Multi-message sent: %s (%d deliveries)\n", msg.MessageID, len(msg.Deliveries))
-			for _, d := range msg.Deliveries {
-				status := "encrypted"
-				if d.Ciphertext == nil {
-					status = "pending (no session)"
-				}
-				fmt.Printf("  -> %s: %s\n", d.Recipient, status)
+			if !groupchat.Execute(st, target, args) {
+				fmt.Println("[-] unknown command:", cmd)
 			}
-
 		case "clear":
 			ui.ClearScreen()
 			fmt.Println("=== NexTalk (Offline Transport) ===")
@@ -471,4 +279,37 @@ func RunOffline(api *core.Engine) {
 			fmt.Println("[-] unknown command")
 		}
 	}
+}
+
+// replState builds a registry.State view over the REPL's active client so
+// the shared groupchat layer can be driven with the same semantics as the
+// GUI transport. Stores are reopened per command — matching CLI behavior.
+func replState(cl *client.Client) *registry.State {
+	st := registry.NewState(nil, config.Config{})
+	st.ActiveClient = cl
+	st.InitMailbox()
+	st.InitFanout()
+	return st
+}
+
+// parsePastedPayload extracts raw handshake wire bytes from pasted input.
+// Accepted forms:
+//
+//  1. A wrapped envelope ("{"type":"offer","data":"base64..."}") — the
+//     paste-safe container the shell itself prints.
+//  2. A bare legacy JSON offer/answer — what older builds printed.
+//  3. Raw nanopack bytes (e.g. piped from a file).
+func parsePastedPayload(pasted string) ([]byte, error) {
+	trimmed := []byte(strings.TrimSpace(pasted))
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("nothing pasted")
+	}
+	if trimmed[0] == '{' {
+		if env, err := unwrapEnvelope(trimmed); err == nil && env.Data != nil {
+			return env.Data, nil
+		}
+		// Not our envelope — legacy bare JSON; the engine's dual-format
+		// decode handles it.
+	}
+	return trimmed, nil
 }

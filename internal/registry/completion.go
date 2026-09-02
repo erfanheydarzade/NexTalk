@@ -30,6 +30,9 @@ const (
 	ArgIdentity
 	// ArgContext is a multi-message context ID that `context` subcommands take.
 	ArgContext
+	// ArgThread is anything `mailbox` accepts: a peer, a contacts alias, a
+	// group context ID, or a group display name.
+	ArgThread
 )
 
 // CommandSpec describes one command inside a transport sub-shell: its name, any
@@ -46,6 +49,18 @@ type CommandSpec struct {
 	Variadic ArgKind
 	Usage    string
 	Help     string
+
+	// Complete, when non-nil, fully owns candidate selection for this
+	// command's arguments. It replaces the Args/Variadic mapping entirely —
+	// use it when a command's slots depend on earlier words, e.g.
+	// `context add <ctx> <peer>` completing contexts then peers while
+	// `context create` takes a free-form name.
+	//
+	// typed holds every word after the command name itself (so for the
+	// line "context add abc de", typed is ["add","abc","de"]); argIndex is
+	// the position being completed and fragment == typed[argIndex] when in
+	// range. Return nil for "no candidates".
+	Complete func(s *State, typed []string, argIndex int, fragment string) []string
 }
 
 // ArgKindAt returns the ArgKind for positional argument i (0-based, excluding
