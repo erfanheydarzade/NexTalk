@@ -27,7 +27,7 @@ const (
 	exampleID             = "relay-example"
 	exampleVersion        = "1.0.0"
 
-	opError        uint8  = 0
+	opError uint8 = 0
 
 	errUnsupported uint32 = 2
 	errNotReady    uint32 = 3

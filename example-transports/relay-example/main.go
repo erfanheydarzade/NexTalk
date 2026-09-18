@@ -82,7 +82,8 @@ func (q *queue) send(recipientPub, frame []byte) error {
 	if len(frame) == 0 || len(frame) > maxFrameBytes {
 		return fmt.Errorf("frame out of bounds")
 	}
-	sum := sha256.Sum256(recipientPub); mbox := hex.EncodeToString(sum[:16])
+	sum := sha256.Sum256(recipientPub)
+	mbox := hex.EncodeToString(sum[:16])
 	if err := os.MkdirAll(q.mboxPath(mbox), 0o755); err != nil {
 		return err
 	}
