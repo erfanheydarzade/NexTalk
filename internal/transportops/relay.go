@@ -107,8 +107,8 @@ func RelayInfo(d *Deps, id string) error {
 				"id": in.Manifest.ID, "name": in.Manifest.Name,
 				"version": in.Manifest.Version, "api_version": in.Manifest.APIVersion,
 				"enabled": in.Enabled, "running": in.Running,
-				"capabilities": in.Manifest.Capabilities,
-				"permissions":  in.Manifest.Permissions,
+				"capabilities":       in.Manifest.Capabilities,
+				"permissions":        in.Manifest.Permissions,
 				"mailboxes_attached": len(atts),
 			})
 		}

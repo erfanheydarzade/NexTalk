@@ -27,45 +27,45 @@ type asm struct {
 	code []byte
 }
 
-func (a *asm) b(v ...byte)        { a.code = append(a.code, v...) }
-func (a *asm) u(v uint32)         { a.code = append(a.code, uleb(v)...) }
+func (a *asm) b(v ...byte) { a.code = append(a.code, v...) }
+func (a *asm) u(v uint32)  { a.code = append(a.code, uleb(v)...) }
 
 // i32c emits i32.const with SIGNED LEB128 (s33): values 64..127,
 // 8192..16383, ... need an extra byte versus unsigned LEB — emitting
 // unsigned here silently turns 64 into -64.
-func (a *asm) i32c(v int32)       { a.b(0x41); a.code = append(a.code, sleb(v)...) }
-func (a *asm) i64c(v int64)       { a.b(0x42); a.code = append(a.code, sleb64(v)...) }
-func (a *asm) get(i uint32)       { a.b(0x20); a.u(i) }
-func (a *asm) set(i uint32)       { a.b(0x21); a.u(i) }
-func (a *asm) gget(i uint32)      { a.b(0x23); a.u(i) }
-func (a *asm) gset(i uint32)      { a.b(0x24); a.u(i) }
-func (a *asm) load8()             { a.b(0x2c, 0x00, 0x00) }
-func (a *asm) store8()            { a.b(0x3a, 0x00, 0x00) }
-func (a *asm) add()               { a.b(0x6a) }
-func (a *asm) sub()               { a.b(0x6b) }
-func (a *asm) shl()               { a.b(0x74) }
-func (a *asm) shrU()              { a.b(0x76) }
-func (a *asm) or()                { a.b(0x72) }
-func (a *asm) xor()               { a.b(0x73) }
-func (a *asm) eqz()               { a.b(0x45) }
-func (a *asm) eq()                { a.b(0x46) }
-func (a *asm) ne()                { a.b(0x47) }
-func (a *asm) ltU()               { a.b(0x49) }
-func (a *asm) gtU()               { a.b(0x4b) }
-func (a *asm) geU()               { a.b(0x4f) }
-func (a *asm) i64extend()         { a.b(0xad) }
-func (a *asm) i64shl()            { a.b(0x86) }
-func (a *asm) i64or()             { a.b(0x84) }
-func (a *asm) block()             { a.b(0x02, 0x40) }
-func (a *asm) loop()              { a.b(0x03, 0x40) }
-func (a *asm) br(d uint32)        { a.b(0x0c); a.u(d) }
-func (a *asm) brIf(d uint32)      { a.b(0x0d); a.u(d) }
-func (a *asm) ifI32()             { a.b(0x04, 0x7f) }
-func (a *asm) ifVoid()            { a.b(0x04, 0x40) }
-func (a *asm) els()               { a.b(0x05) }
-func (a *asm) end()               { a.b(0x0b) }
-func (a *asm) ret()               { a.b(0x0f) }
-func (a *asm) drop()              { a.b(0x1a) }
+func (a *asm) i32c(v int32)  { a.b(0x41); a.code = append(a.code, sleb(v)...) }
+func (a *asm) i64c(v int64)  { a.b(0x42); a.code = append(a.code, sleb64(v)...) }
+func (a *asm) get(i uint32)  { a.b(0x20); a.u(i) }
+func (a *asm) set(i uint32)  { a.b(0x21); a.u(i) }
+func (a *asm) gget(i uint32) { a.b(0x23); a.u(i) }
+func (a *asm) gset(i uint32) { a.b(0x24); a.u(i) }
+func (a *asm) load8()        { a.b(0x2c, 0x00, 0x00) }
+func (a *asm) store8()       { a.b(0x3a, 0x00, 0x00) }
+func (a *asm) add()          { a.b(0x6a) }
+func (a *asm) sub()          { a.b(0x6b) }
+func (a *asm) shl()          { a.b(0x74) }
+func (a *asm) shrU()         { a.b(0x76) }
+func (a *asm) or()           { a.b(0x72) }
+func (a *asm) xor()          { a.b(0x73) }
+func (a *asm) eqz()          { a.b(0x45) }
+func (a *asm) eq()           { a.b(0x46) }
+func (a *asm) ne()           { a.b(0x47) }
+func (a *asm) ltU()          { a.b(0x49) }
+func (a *asm) gtU()          { a.b(0x4b) }
+func (a *asm) geU()          { a.b(0x4f) }
+func (a *asm) i64extend()    { a.b(0xad) }
+func (a *asm) i64shl()       { a.b(0x86) }
+func (a *asm) i64or()        { a.b(0x84) }
+func (a *asm) block()        { a.b(0x02, 0x40) }
+func (a *asm) loop()         { a.b(0x03, 0x40) }
+func (a *asm) br(d uint32)   { a.b(0x0c); a.u(d) }
+func (a *asm) brIf(d uint32) { a.b(0x0d); a.u(d) }
+func (a *asm) ifI32()        { a.b(0x04, 0x7f) }
+func (a *asm) ifVoid()       { a.b(0x04, 0x40) }
+func (a *asm) els()          { a.b(0x05) }
+func (a *asm) end()          { a.b(0x0b) }
+func (a *asm) ret()          { a.b(0x0f) }
+func (a *asm) drop()         { a.b(0x1a) }
 
 // packOut emits: push ((u64)ptr<<32)|len.
 func (a *asm) packOut(ptr uint32, length uint32) {

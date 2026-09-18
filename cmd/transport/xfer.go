@@ -41,7 +41,7 @@ func registerCommand() *cobra.Command {
 			"This does NOT register your identity for messaging: the mailbox lives at\n" +
 			"HMAC(scoped_pubkey), while peers address you at HMAC(identity_pubkey).\n" +
 			"For `peer connect` / messaging, use `transport register-identity`.",
-		Args:  cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return transportops.FilerelayRegister(openDeps(cmd), args[0], identity, router)
 		},

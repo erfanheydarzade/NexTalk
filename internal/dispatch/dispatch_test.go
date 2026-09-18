@@ -99,8 +99,8 @@ func TestDispatchBatchErrors(t *testing.T) {
 	ct, _ := a.Encrypt(b.Id, []byte("x"))
 	frames := [][]byte{
 		frame.Wrap(relay.TypeMessage, ct),
-		{0xFF},          // unknown type
-		[]byte{},        // empty
+		{0xFF},                            // unknown type
+		[]byte{},                          // empty
 		frame.Wrap(relay.TypeMessage, ct), // replay (same nonce) → error event
 	}
 	events := DispatchBatch(ctx, b, b.IdentityPrivate, frames, OpenDeps(b), nil)

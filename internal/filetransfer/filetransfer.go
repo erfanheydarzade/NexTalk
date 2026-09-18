@@ -195,6 +195,7 @@ func shortPeer(id string) string {
 	}
 	return id[:6] + "..." + id[len(id)-4:]
 }
+
 // ReassembleAndDecrypt verifies chunk hashes, reassembles, and decrypts.
 func ReassembleAndDecrypt(cl *Client.Client, peerID string, chunks [][]byte, mf *Manifest) ([]byte, error) {
 	if len(chunks) != mf.ChunkCount {

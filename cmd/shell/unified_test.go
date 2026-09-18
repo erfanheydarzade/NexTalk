@@ -251,7 +251,7 @@ func TestReadlineUsesSharedWriter(t *testing.T) {
 	// the input arrow; if readline writes to a different engine (its
 	// built-in Windows ANSI emulator), bold SGR combos render white there
 	// and sky blue on the context line. Both configs must share the writer.
-_unified := buildRegistry()
+	_unified := buildRegistry()
 	_ = _unified
 	cfg := readlineConfig(&RuntimeState{}, &fakeTransport{})
 	if cfg.Stdout != ui.ConsoleOut {

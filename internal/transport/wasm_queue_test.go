@@ -412,7 +412,6 @@ func sec(id byte, content []byte) []byte {
 	return append(out, content...)
 }
 
-
 // sendBodyOverride swaps the send body for fault isolation experiments.
 var sendBodyOverride []byte
 
@@ -591,7 +590,8 @@ func TestWASMQueueTransport(t *testing.T) {
 	}
 }
 
-func TestWASMRefusesBadModule(t *testing.T) {	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func TestWASMRefusesBadModule(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mf, _ := ParseManifest([]byte(`{"id":"wasm-bad","name":"B","version":"1","api_version":"1","entry":"x.wasm","capabilities":["message"],"permissions":[]}`))
 	if _, err := NewWASMTransport(ctx, []byte{0x00, 0x61, 0x73, 0x6d}, mf, nil); err == nil {
