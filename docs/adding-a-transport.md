@@ -1,11 +1,119 @@
-# Adding a Custom Transport to NexTalk
+# Adding a Transport to NexTalk
 
-This guide walks you through creating a new transport backend and wiring it into
-both the interactive shell and the CLI. You will never need to touch `root.go`
-or `shell.go` — the registry discovers your transport automatically through Go's
-`init()` mechanism.
+There are **two** ways to add a transport. Pick one:
+
+| | **A. External module (recommended)** | **B. Compiled-in transport** |
+|---|---|---|
+| Who | Third-party developers, anyone | Core team only |
+| Rebuild NexTalk? | **Never** — ship a `.ntx` file | Yes — new package + blank import |
+| Isolation | OS process or WASM sandbox | In-process (full trust) |
+| Sees user keys? | **Impossible** — the RPC has no key fields | Yes (same process) |
+| Template | `example-transports/relay-example/` | Steps 1–5 below |
+
+Start with A unless your transport must live inside the binary. The runtime
+system is specified in [`transport-runtime.md`](transport-runtime.md) and
+exercised end-to-end in [`real-scenario.md`](real-scenario.md).
 
 ---
+
+# Part A — External transport module (no rebuild)
+
+## A.1 Copy the template
+
+`example-transports/relay-example/` is a complete, working transport in its
+own Go module: filesystem queue, `message` capability, golden wire-compat
+test. Copy the directory and make it yours — its
+[`README.md`](../example-transports/relay-example/README.md) walks through
+build, package, install, and a two-user chat scenario.
+
+The template works in any language: the contract is bytes on stdio (or WASM
+function calls), not Go APIs.
+
+## A.2 Write `manifest.json`
+
+```json
+{
+  "id": "my-transport",
+  "name": "My Transport",
+  "version": "1.0.0",
+  "api_version": "1",
+  "entry": "my-transport",
+  "capabilities": ["message"],
+  "permissions": ["network"]
+}
+```
+
+Rules (enforced at install — fail closed):
+
+- `id`: `^[a-z0-9][a-z0-9-]{0,63}$`; `entry`: bare file name, no paths.
+- `api_version` must be `"1"` (the only version the core speaks).
+- `capabilities` ⊆ `message`, `binary-transfer`, `presence`,
+  `local-network`, `p2p`. Declare only what you implement.
+- `permissions` ⊆ `network`, `storage`. There is no `identity-keys`
+  permission and there never will be — see the trust rule below.
+- `.wasm` entries run sandboxed under wazero (see A.5); anything else spawns
+  as an external process.
+
+## A.3 Implement the ops
+
+Transport API v1 (`api_version: "1"`), stdio framing `[len BE32][NanoPack
+body]`, schema 100 `Envelope{op, req_id, payload}`. Full table with schema
+IDs: [`transport-runtime.md`](transport-runtime.md#5-transport-api-v1-apiversion-1).
+
+Message-only transports implement 8 ops — `initialize`, `capabilities`,
+`start`/`stop`, `send`, `attach`, `detach`, `poll`, `status` — and answer
+anything else with op 0 + `SchemaError`. `binary-transfer` adds
+register/resolve plus `xfer-create/put/resume/get/complete` (schemas
+115–126). Keep the schema IDs byte-identical; the golden tests on both
+sides pin them.
+
+## A.4 The trust rule (non-negotiable)
+
+Frames are opaque `[type byte][nanopack payload]` bytes the core encrypted.
+Your transport:
+
+- carries frames, recipient public keys / explicit mailbox addresses,
+  per-mailbox `read_secret` bearers, and URLs — and **nothing else**;
+- never adds key fields to the RPC (reviewers check this first);
+- authenticates mailbox reads with the bearer the core hands it per call;
+- signs its own server requests (if any) with its **own** courier key, like
+  the FileRelay bridge does — the true sender lives inside the E2E frame.
+
+## A.5 Native or WASM
+
+- **Native** (`entry: "my-transport"`): any executable speaking the stdio
+  RPC. Use it when you need sockets, the filesystem, or existing libraries.
+- **WASM** (`entry: "queue.wasm"`): implements the function-call ABI in
+  [`transport-runtime.md`](transport-runtime.md#10-wasm-transports)
+  (`ntx_init/caps/start/stop/send/attach/detach/poll/status` over linear
+  memory). No WASI, no sockets, no filesystem — queue-model transports fit;
+  socket transports must use the process model. The hand-assembled module in
+  `internal/transport/wasm_*_test.go` is the ABI reference implementation.
+
+## A.6 Package, install, verify
+
+`.ntx` = zip with `manifest.json` at root plus the entry binary:
+
+```bash
+zip my-transport.ntx manifest.json my-transport
+nextalk transport install my-transport.ntx     # validates, hash-pins, disabled by default
+nextalk transport enable my-transport
+nextalk transport list
+# my-transport  enabled   v1.0.0      caps=[message]
+```
+
+Then exercise it for real: attach a mailbox, `send-frame` an encrypted
+frame, `poll` it back through shared dispatch — exactly as
+[`real-scenario.md`](real-scenario.md) scenarios A–C do.
+
+---
+
+# Part B — Compiled-in transport (core team)
+
+Use this only when the transport must ship inside the `nextalk` binary
+(`worker`, `proxy`, `offline` live here). You will touch the build, but you
+will never need to touch `root.go` or `shell.go` — the registry discovers
+your transport automatically through Go's `init()` mechanism.
 
 ## How the registry works
 
@@ -34,6 +142,10 @@ Each `Entry` carries two optional faces:
 | `CLI` | `registry.CLITransport` | Cobra subcommands (`nextalk <name> ...`) |
 
 Either face can be `nil` if your transport only needs one of them.
+
+**Prefer the runtime system**: every transport built this way is trusted
+with the user's private keys (same process) and can only ship in a NexTalk
+release. If an external module can do the job, build that instead (Part A).
 
 ---
 
@@ -108,15 +220,25 @@ your commands might need:
 
 ```go
 type State struct {
-    API          *core.Engine
-    Config       config.Config
-    Ctx          context.Context
-    ActiveClient *client.Client
-    Worker       relay.Relay       // populate this in Init if you need a relay
-    Mailbox      map[string][]ChatMessage
-    KnownPeers   map[string]bool   // peers seen this session; drives Tab completion
+    API           *core.Engine
+    Config        config.Config
+    Ctx           context.Context
+    ActiveClient  *Client.Client
+    Worker        relay.Relay      // populate this in Init if you need a relay
+    MailboxStore  *mailbox.Store   // persistent per-identity history
+    KnownPeers    map[string]bool  // peers seen this session; drives Tab completion
+    ContextStore  multimsg.ContextStore
+    DeliveryStore multimsg.DeliveryStore
+    Fanout        *multimsg.Fanout
 }
 ```
+
+> Prefer receiving through the shared path: poll your backend for raw
+> layer-1 frames and feed each one to `dispatch.DispatchFrame` (package
+> `internal/dispatch`) instead of reimplementing offer/answer/message/group
+> handling. That is the same code `worker listen` and `transport poll` run —
+> one handshake implementation everywhere. Replies go out through the
+> `dispatch.Sender` callback you bind to your own send.
 
 `State` also carries the helpers the shell's Tab completion relies on:
 
@@ -145,6 +267,7 @@ func (t *MyGUITransport) Init(state *registry.State) error {
 
 func (t *MyGUITransport) Execute(state *registry.State, cmd string, args []string) bool {
     switch cmd {
+
     case "hello":
         fmt.Println("  Hello from my transport!")
 
@@ -153,7 +276,7 @@ func (t *MyGUITransport) Execute(state *registry.State, cmd string, args []strin
 
     case "switch", "exit":
         return false // tells the shell to go back to the main menu
-    
+
     default:
         fmt.Printf("  Unknown command %q. Type 'help'.\n", cmd)
     }
@@ -348,6 +471,11 @@ silently absent from the menu.
 (like the active identity or mailbox). Put those in `registry.State` instead;
 that value is shared across all transports in a single `nextalk shell` session.
 
+**Reimplementing receive dispatch** — don't copy the offer/answer/message
+switch from the old worker code. Call `dispatch.DispatchFrame` with a
+`Sender` bound to your backend; group handling, dedupe, mailbox persistence,
+and event shapes stay identical for every transport.
+
 ---
 
 ## Wiring the same transport into the WASM build
@@ -378,13 +506,13 @@ same pattern `relay.go` (the worker transport) already follows.
    wasm build's equivalent of `cmd/root.go` mounting CLI command groups.
    Add your namespace there, e.g.:
 
-   ```go
-   // internal/wasmbridge/register.go
-   func Register() {
-       // ... existing identity / handshake / message / relay / contacts ...
-       registerMyTransport() // defined in your new my_transport.go
-   }
-   ```
+    ```go
+    // internal/wasmbridge/register.go
+    func Register() {
+        // ... existing identity / handshake / message / relay / contacts ...
+        registerMyTransport() // defined in your new my_transport.go
+    }
+    ```
 
 3. **No shim, no `init()` magic.** Unlike the CLI registry, there's
    nothing else to touch — no blank import, no `MenuOrder`. `main.go`
@@ -392,14 +520,14 @@ same pattern `relay.go` (the worker transport) already follows.
 
 4. **Rebuild and re-check the JS surface.**
 
-   ```bash
-   ./cmd/nextalk-wasm/build.sh
-   python3 -m http.server 8000   # see wasm.md — file:// will not work
-   ```
+    ```bash
+    ./cmd/nextalk-wasm/build.sh
+    python3 -m http.server 8000   # see wasm.md — file:// will not work
+    ```
 
-   Open `http://localhost:8000/web/`, and in the devtools console confirm
-   your new `NexTalk.<yourNamespace>.*` functions exist and return the
-   `{ ... } | { error: "..." }` shape every other bridge call uses.
+    Open `http://localhost:8000/web/`, and in the devtools console confirm
+    your new `NexTalk.<yourNamespace>.*` functions exist and return the
+    `{ ... } | { error: "..." }` shape every other bridge call uses.
 
 5. **Document the addition.** Add your new calls to the "JS API" table in
    `wasm.md`, next to `NexTalk.relay.*`, so the two docs stay in sync the

@@ -26,6 +26,8 @@ what is serialized where, why, and how old formats migrate.
 | `multimsg.MessageContext` descriptor | — (embedded) | carried inside group deliveries |
 | `core.HandShakeOffer` | 20 | relay type `0x01` |
 | `core.HandShakeAnswer` | 21 | relay type `0x02` |
+| `filetransfer.Manifest` (encrypted-file descriptor) | 12 | embedded in transfer tickets; opaque blob to the relay |
+| `filetransfer.Ticket` (transfer reference) | 13 | message content (base64 at copy-paste boundary) |
 
 Legacy compatibility: receivers accept pre-nanopack **JSON** handshake
 payloads from older builds — any payload whose first byte is `{` is parsed as

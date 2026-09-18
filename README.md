@@ -754,13 +754,45 @@ nextalk worker mailbox -i "$BOB" "Design Crew"     # read the thread
 
 ---
 
-## CLI Usage — Shell Mode
+## Shell Mode (primary interface)
 
 ```bash
 ./nextalk shell
 ```
 
-Launches the full shell transport selector:
+The unified shell runs the whole transport ecosystem without leaving the
+prompt — identities, contacts, mailboxes, runtime transports, messages,
+handshakes, and file transfers. Every shell command shares its handler with
+the one-shot CLI twin, so behavior is identical in both. Full reference:
+[`docs/shell.md`](docs/shell.md).
+
+```text
+╭─[nextalk:alice@filerelay]
+╰─❯ help
+```
+
+Pick an identity and a relay once per session; commands fall back to them:
+
+```text
+╰─❯ use identity alice
+╰─❯ use relay filerelay
+╰─❯ transport poll
+╰─❯ message send bob "hello" --ticket BgEB...
+╰─❯ xfer send --to bob -f movie.mp4
+```
+
+Tab completes commands, flags, peers, identities, threads, and files;
+`help <command>` shows full usage; unknown commands get did-you-mean
+suggestions. History is in-memory only (never written to disk — lines can
+hold pasted blobs and bearer secrets). Piped stdin runs non-interactively
+with exit codes: `printf 'xfer list --json\n' | nextalk shell`.
+
+`switch [name]` enters the legacy per-transport sub-shells below, with your
+session identity carried over. They are frozen: bug fixes only.
+
+### Legacy transport shells
+
+Selecting from the old transport menu (or `switch <name>`):
 
 ```
 ╔════════════════════════════════════════╗
@@ -777,7 +809,7 @@ Launches the full shell transport selector:
 bakes its own `"3. "` prefix into the string in `cmd/proxy/register.go`, on top of
 the index the shell's menu loop already prints.)
 
-After selecting a transport, you enter a persistent shell:
+After selecting a transport, you enter its persistent shell:
 
 ```
 ╭─[nextalk:worker]
@@ -979,6 +1011,31 @@ Unlike `worker` (whose root `worker` command runs the shell directly, `cmd/worke
 `proxy`'s root command has no `Run`/`RunE` of its own — only its `run`
 subcommand does (`cmd/proxy/command.go`). Bare `./nextalk proxy` just prints
 usage/help.
+
+---
+
+## CLI Usage — Runtime Transports
+
+Built-in transports (`worker`, `proxy`, `offline`) ship inside the binary.
+**External transports install later with no rebuild** — the core discovers,
+verifies, and runs them as sandboxed modules. Full design:
+[`docs/transport-runtime.md`](docs/transport-runtime.md); command reference:
+[`docs/transport-cli.md`](docs/transport-cli.md); worked end-to-end runs:
+[`docs/real-scenario.md`](docs/real-scenario.md).
+
+```bash
+nextalk transport list                        # relay-example  enabled  v1.0.0  caps=[message]
+nextalk transport install filerelay.ntx --enable
+nextalk transport register filerelay -i <YOUR_ID> --router $R   # mints a mailbox (tag derived from peer ID); auto-attaches
+nextalk transport attach filerelay --mailbox <M> --secret <S> --shard $R --router $R
+nextalk transport poll filerelay -i <YOUR_ID>                  # decrypts + stores, like worker listen
+nextalk transport xfer-send filerelay -i <YOU> --to <PEER> --mailbox <M> --shard $R -f photo.bin
+```
+
+The trust rule is structural: transports are untrusted couriers of opaque
+frames. The RPC has no field for private keys, so a transport cannot receive
+them; FileRelay mailbox registration uses per-user scoped keys that control
+only that mailbox — never identity keys, never decryption.
 
 ---
 
