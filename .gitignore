@@ -38,6 +38,7 @@ web/wasm/
 *.json
 *.zip
 *.np
+*.ntx
 
 # python test scratch build dir (see test.py)
 .testbuild/
