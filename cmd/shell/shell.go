@@ -7,15 +7,14 @@
 package shell
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/chzyer/readline"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
+	"github.com/erfanheydarzade/NexTalk/internal/shellcmd"
 	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
@@ -32,60 +31,29 @@ type RuntimeState = registry.State
 
 func printMainMenu(entries []registry.Entry) {
 	clearScreen()
-	ui.BoldCyan.Println("╔════════════════════════════════════════╗")
-	ui.BoldCyan.Println("║               NexTalk CLI              ║")
-	ui.BoldCyan.Println("╚════════════════════════════════════════╝")
+	ui.Banner()
+	fmt.Println()
+	fmt.Println("  " + ui.Comment.Sprint("Pick a transport to enter its classic shell, or run") + " " +
+		ui.Code.Sprint("nextalk shell") + " " + ui.Comment.Sprint("for the unified experience."))
 	fmt.Println()
 
 	for i, e := range entries {
 		if e.GUI != nil {
-			fmt.Printf("  %d. %s\n", i+1, e.GUI.MenuLabel())
+			fmt.Printf("  %s %s\n", ui.Num.Sprintf("%2d.", i+1), ui.Info.Sprint(e.GUI.MenuLabel()))
 		}
 	}
-	fmt.Printf("  %d. Exit\n\n", len(entries)+1)
+	fmt.Printf("  %s %s\n\n", ui.Num.Sprintf("%2d.", len(entries)+1), ui.Fail.Sprint("Exit"))
+	fmt.Println("  " + ui.Comment.Sprint("Tip: the unified shell does everything in one place —") + " " +
+		ui.Code.Sprint("use identity") + ui.Comment.Sprint(" / ") + ui.Code.Sprint("use relay") + ui.Comment.Sprint(" once, then just chat."))
 }
 
-// RunGUI is the top-level interactive shell. It reads all GUITransports from
-// the registry — it never names a specific transport.
+// RunGUI is the top-level interactive shell: the unified command tree
+// (primary interface — every operation lives here) with the legacy
+// per-transport menu one `switch` away. Piped stdin runs in scripting mode
+// with exit codes instead of an interactive loop.
 func RunGUI(api *core.Engine, cfg config.Config) {
-	scanner := bufio.NewScanner(os.Stdin)
-	state := registry.NewState(api, cfg)
-	entries := registry.GUITransports()
-	exitChoice := fmt.Sprintf("%d", len(entries)+1)
-
-	for {
-		printMainMenu(entries)
-		ui.Bold.Print("Select ❯ ")
-
-		if !scanner.Scan() {
-			return
-		}
-		choice := strings.TrimSpace(scanner.Text())
-
-		if choice == exitChoice || choice == "exit" || choice == "q" {
-			ui.Infof("Goodbye!")
-			return
-		}
-
-		idx := -1
-		for i := range entries {
-			if choice == fmt.Sprintf("%d", i+1) {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			continue
-		}
-
-		t := entries[idx].GUI
-		if err := t.Init(state); err != nil {
-			printError("Failed to initialise transport: %v", err)
-			continue
-		}
-
-		runSubShell(state, t)
-	}
+	session := shellcmd.NewSession()
+	runUnified(api, cfg, session, buildRegistry())
 }
 
 // readlineConfig builds the readline configuration for a transport sub-shell.
@@ -95,8 +63,14 @@ func RunGUI(api *core.Engine, cfg config.Config) {
 // end-to-end rather than by calling Do directly.
 func readlineConfig(state *RuntimeState, t registry.GUITransport) *readline.Config {
 	return &readline.Config{
-		Prompt:       ui.Success.Sprint("╰─❯ "),
+		Prompt:       ui.InputArrow(),
 		AutoComplete: newShellCompleter(state, t),
+		// Same-writer rule as the unified shell (see ui.ConsoleOut):
+		// readline's built-in Windows ANSI emulator mangles bold SGR
+		// combos, so its screen output must go through the same engine
+		// as our own prints, or ╭─ and ╰─❯ render in different colors.
+		Stdout: ui.ConsoleOut,
+		Stderr: ui.ConsoleOut,
 		// HistoryFile is deliberately unset: shell input lines can contain
 		// pasted handshake/ciphertext blobs, and persisting those to disk in
 		// plaintext would leak protocol material into an unprotected file.
@@ -110,10 +84,11 @@ func readlineConfig(state *RuntimeState, t registry.GUITransport) *readline.Conf
 // transport's name and the completer is bound to that transport's own command
 // specs (see completer.go) rather than one shared hard-coded list.
 func runSubShell(state *RuntimeState, t registry.GUITransport) {
-	fmt.Printf("\n%s%s%s\n",
-		ui.Info.Sprint("╭─["),
-		ui.Success.Sprintf("nextalk:%s", t.Name()),
-		ui.Info.Sprint("]"))
+	fmt.Fprintf(ui.ConsoleOut, "\n%s%s%s %s\n",
+		ui.PromptFrame.Sprint("╭─["),
+		ui.PromptFrame.Sprintf("nextalk:%s", t.Name()),
+		ui.PromptFrame.Sprint("]"),
+		ui.Comment.Sprint("— classic shell · `exit` goes back · `help` lists commands"))
 
 	rl, err := readline.NewEx(readlineConfig(state, t))
 	if err != nil {
