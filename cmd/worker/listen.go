@@ -3,19 +3,14 @@ package worker
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"unicode/utf8"
 
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
-	"github.com/erfanheydarzade/NexTalk/crypto"
+	dispatchPkg "github.com/erfanheydarzade/NexTalk/internal/dispatch"
 	"github.com/erfanheydarzade/NexTalk/internal/mailbox"
 	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
-	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
 	"github.com/spf13/cobra"
 )
 
@@ -159,7 +154,10 @@ func newListenDeps(cl *Client.Client, r relay.Relay) *listenDeps {
 	return d
 }
 
-// dispatch routes an incoming raw envelope body and returns a single ListenEvent.
+// dispatch routes an incoming raw envelope body through the shared,
+// transport-agnostic dispatcher (internal/dispatch) and converts the
+// result to this command's ListenEvent shape. Replies (handshake answers)
+// go back out over the worker relay.
 func dispatch(
 	cl Client.Client,
 	ctx context.Context,
@@ -169,179 +167,32 @@ func dispatch(
 	body []byte,
 	deps *listenDeps,
 ) (*ListenEvent, error) {
-
-	t, data, err := workerrelay.UnwrapEnvelope(body)
+	_ = engine
+	sender := func(ctx context.Context, recipientPub []byte, t relay.Type, payload []byte) error {
+		return sendEnvelope(ctx, r, selfPriv, recipientPub, t, payload)
+	}
+	d := &dispatchPkg.Deps{Client: &cl}
+	if deps != nil {
+		d.Mailbox = deps.store
+		d.Fanout = deps.fanout
+	}
+	ev, err := dispatchPkg.DispatchFrame(ctx, &cl, selfPriv, body, d, sender)
 	if err != nil {
-		return nil, fmt.Errorf("unwrap envelope: %w", err)
+		return nil, err
 	}
-
-	switch t {
-	case relay.TypeOffer:
-		return handleOffer(cl, ctx, engine, r, selfPriv, data)
-
-	case relay.TypeAnswer:
-		return handleAnswer(cl, engine, data)
-
-	case relay.TypeMessage:
-		return handleMessage(cl, engine, data, deps)
-
-	case relay.TypeMultiMsg:
-		return handleMultiMessage(data, deps, cl.Id)
-
-	default:
-		return nil, fmt.Errorf("unknown envelope type: %d", t)
+	if ev == nil {
+		return nil, nil
 	}
-}
-
-func handleOffer(
-	cl Client.Client,
-	ctx context.Context,
-	engine *core.Engine,
-	r relay.Relay,
-	selfPriv ed25519.PrivateKey,
-	data []byte,
-
-) (*ListenEvent, error) {
-
-	offer, err := core.DecodeOffer(data)
-	if err != nil {
-		return nil, fmt.Errorf("decode offer: %w", err)
+	out := &ListenEvent{
+		Type:     ev.Type,
+		Peer:     ev.Peer,
+		Sender:   ev.Sender,
+		Encoding: ev.Encoding,
+		Message:  ev.Message,
+		Context:  ev.Context,
 	}
-
-	answerBytes, err := cl.AcceptOffer(data)
-	if err != nil {
-		return nil, fmt.Errorf("accept offer: %w", err)
+	for _, a := range ev.Actions {
+		out.Actions = append(out.Actions, ListenAction{Type: a.Type, Peer: a.Peer})
 	}
-
-	if err := sendEnvelope(
-		ctx,
-		r,
-		selfPriv,
-		offer.IdPub,
-		relay.TypeAnswer,
-		answerBytes,
-	); err != nil {
-		return nil, fmt.Errorf("send answer: %w", err)
-	}
-
-	return &ListenEvent{
-		Type: "offer",
-		Peer: hex.EncodeToString(offer.IdPub),
-		Actions: []ListenAction{
-			{
-				Type: "answer_sent",
-				Peer: hex.EncodeToString(offer.IdPub),
-			},
-		},
-	}, nil
-}
-
-func handleAnswer(
-	cl Client.Client,
-	engine *core.Engine,
-	data []byte,
-) (*ListenEvent, error) {
-
-	peerID, err := cl.FinishHandshake(data)
-	if err != nil {
-		return nil, fmt.Errorf("finish handshake: %w", err)
-	}
-
-	return &ListenEvent{
-		Type: "answer",
-		Peer: peerID,
-		Actions: []ListenAction{
-			{
-				Type: "session_established",
-				Peer: peerID,
-			},
-		},
-	}, nil
-}
-
-func handleMessage(
-	cl Client.Client,
-	engine *core.Engine,
-	data []byte,
-	deps *listenDeps,
-) (*ListenEvent, error) {
-
-	senderID, plaintext, err := cl.Decrypt(data)
-	if err != nil {
-		if errors.Is(err, crypto.ErrReplay) {
-			// senderID is empty on failure — don't print a dangling prefix.
-			return nil, fmt.Errorf("incoming message %s", describeDecryptError(err))
-		}
-		return nil, fmt.Errorf("decrypt: %w", err)
-	}
-
-	event := &ListenEvent{
-		Type:   "message",
-		Sender: senderID,
-	}
-
-	if utf8.Valid(plaintext) {
-		event.Encoding = "utf-8"
-		event.Message = string(plaintext)
-	} else {
-		event.Encoding = "base64"
-		event.Message = base64.StdEncoding.EncodeToString(plaintext)
-	}
-
-	// Persist the message so it survives this process — the whole point of
-	// the shared mailbox store. Binary payloads are stored in their base64
-	// rendering, matching what was displayed.
-	if deps != nil && deps.store != nil {
-		if err := deps.store.AppendIncoming(senderID, event.Message); err != nil {
-			return event, fmt.Errorf("store incoming message: %w", err)
-		}
-	}
-
-	return event, nil
-}
-
-// handleMultiMessage processes a fan-out (group) delivery end to end:
-// decrypt against the 1:1 session, verify the binding, learn the group
-// metadata, dedupe, and record into the group thread.
-func handleMultiMessage(
-	data []byte,
-	deps *listenDeps,
-	selfID string,
-) (*ListenEvent, error) {
-
-	if deps == nil || deps.fanout == nil {
-		return nil, fmt.Errorf("group message received but fanout unavailable")
-	}
-
-	inbound, err := deps.fanout.ProcessDelivery(selfID, data)
-	if err != nil {
-		if errors.Is(err, multimsg.ErrDuplicateDelivery) {
-			// Already shown in a previous poll — stay silent, emit no event.
-			return nil, nil
-		}
-		return nil, fmt.Errorf("group message %s", describeDecryptError(err))
-	}
-
-	body := string(inbound.Plaintext)
-	if !utf8.Valid(inbound.Plaintext) {
-		body = base64.StdEncoding.EncodeToString(inbound.Plaintext)
-	}
-
-	if deps.store != nil {
-		if err := deps.store.AppendGroupIncoming(
-			string(inbound.ContextID()),
-			inbound.DisplayName(),
-			inbound.Sender,
-			body,
-		); err != nil {
-			return nil, fmt.Errorf("store group message: %w", err)
-		}
-	}
-
-	return &ListenEvent{
-		Type:    "group_message",
-		Sender:  inbound.Sender,
-		Context: inbound.DisplayName(),
-		Message: body,
-	}, nil
+	return out, nil
 }

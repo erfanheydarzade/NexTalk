@@ -2,9 +2,9 @@
 package worker
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -12,8 +12,8 @@ import (
 	Client "github.com/erfanheydarzade/NexTalk/client"
 	"github.com/erfanheydarzade/NexTalk/core"
 	"github.com/erfanheydarzade/NexTalk/internal/config"
+	dispatchPkg "github.com/erfanheydarzade/NexTalk/internal/dispatch"
 	"github.com/erfanheydarzade/NexTalk/internal/groupchat"
-	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
 	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
@@ -202,11 +202,7 @@ func (t *WorkerGUITransport) Execute(state *registry.State, cmd string, args []s
 		}
 
 		for _, m := range msgs {
-			t, data, err := workerrelay.UnwrapEnvelope(m.Body)
-			if err != nil {
-				continue
-			}
-			dispatchGUI(state, t, data)
+			dispatchGUIFrame(state, m.Body)
 		}
 
 	case "send", "encrypt":
@@ -282,102 +278,57 @@ func (t *WorkerGUITransport) Help() {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
-	switch t {
-
-	case relay.TypeOffer:
-		offer, err := core.DecodeOffer(data)
-		if err != nil {
-			ui.Errorf("Bad offer payload: %v", err)
-			return
-		}
-		ansBytes, err := state.ActiveClient.AcceptOffer(data)
-		if err != nil {
-			ui.Errorf("Accept offer failed: %v", err)
-			return
-		}
-		pub, err := ed25519PubFromID(offer.SenderId)
-		if err != nil {
-			ui.Errorf("Invalid sender ID: %v", err)
-			return
-		}
-		if err := sendEnvelope(state.Ctx, state.Worker, state.ActiveClient.IdentityPrivate, pub, relay.TypeAnswer, ansBytes); err != nil {
-			ui.Errorf("Send answer failed: %v", err)
-			return
-		}
-		state.RememberPeer(offer.SenderId)
-		ui.Successf("Auto-answered offer from %s", registry.ShortID(offer.SenderId))
-		ui.Infof("%s is now Tab-completable — try 'send <Tab>'.", registry.ShortID(offer.SenderId))
-
-	case relay.TypeAnswer:
-		peerID, err := state.ActiveClient.FinishHandshake(data)
-		if err != nil {
-			ui.Errorf("Handshake finish failed: %v", err)
-			return
-		}
-		state.RememberPeer(peerID)
-		ui.Successf("Session established with: %s", registry.ShortID(peerID))
-
-	case relay.TypeMessage:
-		senderID, pt, err := state.ActiveClient.Decrypt(data)
-		if err != nil {
-			ui.Errorf("Decrypt failed: %s", describeDecryptError(err))
-			return
-		}
-		body := decodePlaintext(pt)
-		if state.MailboxStore == nil {
-			state.InitMailbox()
-		}
-		if state.MailboxStore != nil {
-			if err := state.MailboxStore.AppendIncoming(senderID, body); err != nil {
-				ui.Warnf("Received, but could not store: %v", err)
-			}
-		}
-		state.RememberPeer(senderID)
-		ui.Mailf("New message from %s — type 'mailbox %s'.", registry.ShortID(senderID), registry.ShortID(senderID))
-
-	case relay.TypeMultiMsg:
-		if state.Fanout == nil {
-			ui.Warnf("Multi-message received but fanout not initialized")
-			return
-		}
-		inbound, err := state.Fanout.ProcessDelivery(state.ActiveClient.Id, data)
-		if err != nil {
-			if errors.Is(err, multimsg.ErrDuplicateDelivery) {
-				return // Already shown — stay silent on redelivery
-			}
-			ui.Errorf("Group message %s", describeDecryptError(err))
-			return
-		}
-		if state.MailboxStore == nil {
-			state.InitMailbox()
-		}
-		if state.MailboxStore != nil {
-			err := state.MailboxStore.AppendGroupIncoming(
-				string(inbound.ContextID()),
-				inbound.DisplayName(),
-				inbound.Sender,
-				decodePlaintext(inbound.Plaintext),
-			)
-			if err != nil {
-				ui.Warnf("Received, but could not store: %v", err)
-			}
-		}
-		state.RememberPeer(inbound.Sender)
-		// The hint must be something `mailbox <arg>` can actually resolve:
-		// the display name when known, otherwise the short context ID
-		// (ResolveThread matches unambiguous ID prefixes).
-		groupName := inbound.DisplayName()
-		hint := groupName
-		if short, ok := strings.CutPrefix(groupName, "group:"); ok {
+// dispatchGUIFrame routes one raw layer-1 frame through the shared,
+// transport-agnostic dispatcher and renders the resulting event with the
+// same UI text the worker shell always printed. Replies go back over the
+// worker relay — the only worker-specific part left here.
+func dispatchGUIFrame(state *registry.State, body []byte) {
+	if state.ActiveClient == nil {
+		return
+	}
+	sender := func(ctx context.Context, recipientPub []byte, t relay.Type, payload []byte) error {
+		return sendEnvelope(ctx, state.Worker, state.ActiveClient.IdentityPrivate, recipientPub, t, payload)
+	}
+	d := &dispatchPkg.Deps{
+		Client:  state.ActiveClient,
+		Mailbox: state.MailboxStore,
+		Fanout:  state.Fanout,
+	}
+	ev, err := dispatchPkg.DispatchFrame(state.Ctx, state.ActiveClient, state.ActiveClient.IdentityPrivate, body, d, sender)
+	if err != nil {
+		ui.Errorf("%v", err)
+		return
+	}
+	if ev == nil {
+		return // duplicate delivery, already shown
+	}
+	switch ev.Type {
+	case "offer":
+		state.RememberPeer(ev.Peer)
+		ui.Successf("Auto-answered offer from %s", registry.ShortID(ev.Peer))
+		ui.Infof("%s is now Tab-completable — try 'send <Tab>'.", registry.ShortID(ev.Peer))
+	case "answer":
+		state.RememberPeer(ev.Peer)
+		ui.Successf("Session established with: %s", registry.ShortID(ev.Peer))
+	case "message":
+		state.RememberPeer(ev.Sender)
+		ui.Mailf("New message from %s — type 'mailbox %s'.", registry.ShortID(ev.Sender), registry.ShortID(ev.Sender))
+	case "group_message":
+		state.RememberPeer(ev.Sender)
+		hint := ev.Context
+		if short, ok := strings.CutPrefix(ev.Context, "group:"); ok {
 			hint = short
 		}
 		ui.Mailf("New group message in [%s] from %s — type 'mailbox %s'.",
-			groupName, registry.ShortID(inbound.Sender), hint)
-
+			ev.Context, registry.ShortID(ev.Sender), hint)
 	default:
-		ui.Warnf("Unknown envelope type: %d", t)
+		ui.Warnf("Unknown envelope type: %s", ev.Type)
 	}
+}
+
+// dispatchGUI is kept for call-site stability and delegates to dispatchGUIFrame.
+func dispatchGUI(state *registry.State, t relay.Type, data []byte) {
+	dispatchGUIFrame(state, relay.WrapEnvelope(t, data))
 }
 
 // decodePlaintext renders raw decrypted bytes as displayable text. UTF-8 is

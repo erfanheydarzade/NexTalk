@@ -13,5 +13,6 @@ package transports
 import (
 	_ "github.com/erfanheydarzade/NexTalk/cmd/offline"
 	_ "github.com/erfanheydarzade/NexTalk/cmd/proxy"
+	_ "github.com/erfanheydarzade/NexTalk/cmd/transport"
 	_ "github.com/erfanheydarzade/NexTalk/cmd/worker"
 )
