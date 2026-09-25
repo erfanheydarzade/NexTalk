@@ -10,9 +10,11 @@
 package shell
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/erfanheydarzade/NexTalk/internal/registry"
 
@@ -1043,15 +1045,23 @@ func printTopHelp(d *transportops.Deps) {
 			{"exit", "Leave the shell", "👋"},
 		}},
 	}
+
 	d.Human("NexTalk shell — every operation lives here. `help <command>` for details, `quickstart` for the tour.")
 	d.Human("")
+
+	var buf bytes.Buffer
+	tw := tabwriter.NewWriter(&buf, 0, 4, 2, ' ', 0)
+
 	for _, sec := range sections {
-		d.Human("%s", sec.title)
-		for _, g := range sec.items {
-			d.Human("  %s  %-10s %s", g.icon, g.name, g.short)
+		fmt.Fprintf(tw, "%s\n", sec.title)
+		for _, it := range sec.items {
+			fmt.Fprintf(tw, "  %s  %s\t%s\n", it.icon, it.name, it.short)
 		}
-		d.Human("")
+		fmt.Fprintln(tw)
 	}
+	tw.Flush()
+
+	d.Human("%s", buf.String())
 	d.Human("Session: `use identity <id>`, `use relay <id>`; `context` shows state. Tab completes everything.")
 }
 

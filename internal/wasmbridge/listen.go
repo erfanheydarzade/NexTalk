@@ -122,11 +122,17 @@ func handleOfferEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.Pr
 		return nil, fmt.Errorf("send answer: %w", err)
 	}
 
+	// "peer" MUST be the canonical base58 peer ID (senderID) — the same key
+	// st.Sessions is indexed by and the same form message/answer events use.
+	// The raw Ed25519 pubkey (hex) is only the relay mailbox address, so it
+	// is exposed separately as "pubkey" and never as the peer identity.
+	pubHex := hex.EncodeToString(offer.IdPub)
 	return map[string]any{
-		"type": "offer",
-		"peer": hex.EncodeToString(offer.IdPub),
+		"type":   "offer",
+		"peer":   senderID,
+		"pubkey": pubHex,
 		"actions": []any{
-			map[string]any{"type": "answer_sent", "peer": hex.EncodeToString(offer.IdPub)},
+			map[string]any{"type": "answer_sent", "peer": senderID, "pubkey": pubHex},
 		},
 	}, nil
 }
