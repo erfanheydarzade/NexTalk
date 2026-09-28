@@ -27,6 +27,61 @@ func MarshalRegisterReq(userTag, routerURL string) ([]byte, error) {
 }
 
 // RegisterReq is the decoded schema 123.
+type IdentityRegisterReq struct {
+	Pubkey    []byte
+	Timestamp uint64
+	Nonce     []byte
+	Signature []byte
+	RouterURL string
+}
+
+// MarshalIdentityRegisterReq: 1=pubkey 32B, 2=timestamp u64, 3=nonce 16B, 4=signature 64B, 5=router_url.
+func MarshalIdentityRegisterReq(pubkey []byte, timestamp uint64, nonce, signature []byte, routerURL string) ([]byte, error) {
+	if len(pubkey) != 32 || len(nonce) != 16 || len(signature) != 64 || len(routerURL) > 512 {
+		return nil, fmt.Errorf("transport: rpc: bad identity register request")
+	}
+	enc := &nanopack.Encoder{}
+	enc.AddID(1, pubkey)
+	enc.AddID(2, putU64(timestamp))
+	enc.AddID(3, nonce)
+	enc.AddID(4, signature)
+	if routerURL != "" {
+		enc.AddID(5, []byte(routerURL))
+	}
+	return enc.Bytes()
+}
+
+// UnmarshalIdentityRegisterReq decodes the FileRelay identity registration RPC request.
+func UnmarshalIdentityRegisterReq(body []byte) (*IdentityRegisterReq, error) {
+	fields, err := nanopack.DecodeID(body)
+	if err != nil {
+		return nil, err
+	}
+	out := &IdentityRegisterReq{}
+	for _, f := range fields {
+		switch f.ID {
+		case 1:
+			out.Pubkey = append([]byte(nil), f.Data...)
+		case 2:
+			v, err := getU64(f.Data)
+			if err != nil {
+				return nil, err
+			}
+			out.Timestamp = v
+		case 3:
+			out.Nonce = append([]byte(nil), f.Data...)
+		case 4:
+			out.Signature = append([]byte(nil), f.Data...)
+		case 5:
+			out.RouterURL = string(append([]byte(nil), f.Data...))
+		}
+	}
+	if len(out.Pubkey) != 32 || len(out.Nonce) != 16 || len(out.Signature) != 64 || len(out.RouterURL) > 512 {
+		return nil, fmt.Errorf("transport: rpc: bad identity register request")
+	}
+	return out, nil
+}
+
 type RegisterReq struct {
 	UserTag   string
 	RouterURL string
