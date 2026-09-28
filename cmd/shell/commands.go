@@ -5,7 +5,7 @@
 // frontend: no transport, crypto, or storage logic lives in this file.
 //
 // Positional transport IDs fall back to the session relay (`use relay`);
-// -i/--id falls back to the session identity (`use identity`). Secrets are
+// `id` falls back to the session identity (`use identity`). Secrets are
 // never flags here when the shell can prompt for hidden input instead.
 package shell
 
@@ -98,7 +98,7 @@ func relayAndTicket(ctx *shellcmd.Context) (string, []string, error) {
 	}
 }
 
-// identityOrSession resolves -i/--id with session fallback.
+// identityOrSession resolves `id` with session fallback.
 func identityOrSession(ctx *shellcmd.Context) (string, error) {
 	if id := ctx.Get("id"); id != "" {
 		return id, nil
@@ -106,7 +106,7 @@ func identityOrSession(ctx *shellcmd.Context) (string, error) {
 	if ctx.Session != nil && ctx.Session.Identity != "" {
 		return ctx.Session.Identity, nil
 	}
-	return "", fmt.Errorf("no identity: pass -i/--id or `use identity` first")
+	return "", fmt.Errorf("no identity: use `use identity <id>` first")
 }
 
 // buildRegistry assembles the full unified command tree.
@@ -207,7 +207,7 @@ func buildRegistry() *shellcmd.Registry {
 		limit := 32
 		if v := ctx.Get("limit"); v != "" {
 			if _, err := fmt.Sscanf(v, "%d", &limit); err != nil {
-				return fmt.Errorf("bad --limit %q", v)
+				return fmt.Errorf("bad limit %q", v)
 			}
 		}
 		identity, err := identityOrSession(ctx)
@@ -222,7 +222,7 @@ func buildRegistry() *shellcmd.Registry {
 	submit("transport send-frame", tf("send-frame", "Deliver one already-encrypted frame file", "[transport]", []shellcmd.Flag{
 		{Name: "to", Usage: "Recipient peer ID or 64-hex Ed25519 pubkey"},
 		{Name: "mailbox", Usage: "Explicit recipient mailbox, 32 hex"},
-		{Name: "shard", Usage: "Shard URL for --mailbox"},
+		{Name: "shard", Usage: "Shard URL for mailbox"},
 		{Name: "file", Short: "f", Usage: "Frame file", Required: true},
 		{Name: "json", Usage: "Machine-readable JSON on stdout", IsBool: true},
 	}, func(ctx *shellcmd.Context) error {
@@ -281,7 +281,7 @@ func buildRegistry() *shellcmd.Registry {
 			{Name: "id", Short: "i", Usage: "Local peer ID (defaults to session identity)"},
 			{Name: "to", Usage: "Recipient peer ID (required, needs a session)"},
 			{Name: "mailbox", Usage: "Explicit mailbox, 32 hex: recipient address, or OWN mailbox for ticket shares"},
-			{Name: "shard", Usage: "Shard URL for --mailbox"},
+			{Name: "shard", Usage: "Shard URL for mailbox"},
 			{Name: "file", Short: "f", Usage: "File to send", Required: true},
 			{Name: "chunk-size", Usage: "Chunk size in bytes", Default: "32768"},
 			{Name: "json", Usage: "Machine-readable JSON on stdout", IsBool: true},
@@ -296,12 +296,12 @@ func buildRegistry() *shellcmd.Registry {
 				return err
 			}
 			if ctx.Get("to") == "" {
-				return fmt.Errorf("missing --to (recipient peer ID)")
+				return fmt.Errorf("missing to (recipient peer ID)")
 			}
 			chunkSize := 32768
 			if v := ctx.Get("chunk-size"); v != "" {
 				if _, err := fmt.Sscanf(v, "%d", &chunkSize); err != nil {
-					return fmt.Errorf("bad --chunk-size %q", v)
+					return fmt.Errorf("bad chunk-size %q", v)
 				}
 			}
 			return transportops.XferSend(depsFor(ctx), transportops.XferSendParams{
@@ -484,7 +484,7 @@ func buildRegistry() *shellcmd.Registry {
 			{Name: "via", Usage: "Transport ID (defaults to session relay)"},
 			{Name: "ticket", Usage: "Ticket base64 appended as its own line"},
 			{Name: "mailbox", Usage: "Explicit recipient mailbox, 32 hex (address-shared transports)"},
-			{Name: "shard", Usage: "Shard URL for --mailbox"},
+			{Name: "shard", Usage: "Shard URL for mailbox"},
 			{Name: "json", Usage: "Machine-readable JSON on stdout", IsBool: true},
 		},
 		Run: func(ctx *shellcmd.Context) error {
@@ -520,7 +520,7 @@ func buildRegistry() *shellcmd.Registry {
 			{Name: "id", Short: "i", Usage: "Local peer ID (defaults to session identity)"},
 			{Name: "via", Usage: "Transport ID (defaults to session relay)"},
 			{Name: "mailbox", Usage: "Explicit recipient mailbox, 32 hex (address-shared transports)"},
-			{Name: "shard", Usage: "Shard URL for --mailbox"},
+			{Name: "shard", Usage: "Shard URL for mailbox"},
 			{Name: "json", Usage: "Machine-readable JSON on stdout", IsBool: true},
 		},
 		Run: func(ctx *shellcmd.Context) error {
@@ -552,7 +552,7 @@ func buildRegistry() *shellcmd.Registry {
 		},
 		Run: func(ctx *shellcmd.Context) error {
 			if len(ctx.Args) < 1 {
-				return fmt.Errorf("usage: peer address <peer> --mailbox <hex> --shard <url>")
+				return fmt.Errorf("usage: peer address <peer> mailbox <hex> shard <url>")
 			}
 			return transportops.PeerRecord(depsFor(ctx), transportops.PeerRecordParams{
 				Peer: ctx.Args[0], MailboxID: ctx.Get("mailbox"), ShardURL: ctx.Get("shard"),
@@ -804,7 +804,7 @@ func buildRegistry() *shellcmd.Registry {
 				{"②", "Where do messages travel?", "`transport list` shows relays · `use relay <id>` selects one · `relay ping` checks it"},
 				{"③", "Say hello securely", "`peer connect <peer>` sends the handshake · `transport poll` finishes it (both sides poll)"},
 				{"④", "Chat", "`message send <peer> hello there` · `mailbox` reads threads · `mailbox <peer>` opens one"},
-				{"⑤", "Share files", "`xfer send --to <peer> -f photo.bin` · paste the ticket into `message send` · receiver runs `xfer recv <ticket> -o out.bin`"},
+				{"⑤", "Share files", "`xfer send file photo.bin to <peer>` · paste the ticket into `message send` · receiver runs `xfer recv <ticket> out out.bin`"},
 			}
 			d.Human("NexTalk in 5 steps (run `context` anytime to see where you are):")
 			d.Human("")
@@ -855,7 +855,7 @@ func buildRegistry() *shellcmd.Registry {
 			d.Human("")
 			d.Human("Active transfers:")
 			if len(transfers) == 0 {
-				d.Human("  none — try `xfer send --to <peer> -f <file>`")
+				d.Human("  none — try `xfer send file <file> to <peer>`")
 				return nil
 			}
 			for _, t := range transfers {
