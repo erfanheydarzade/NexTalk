@@ -58,10 +58,10 @@ func execute(reg *shellcmd.Registry, session *shellcmd.Session, line string, std
 		return fmt.Errorf("unknown command %q (try `help`)", words[0])
 	}
 	rest := words[consumed:]
-	// --help/-h anywhere shows command help instead of executing. Handled
-	// before flag parsing so help never trips on other flags.
+	// `help` is a shell command keyword, not an executable-style flag.
+	// It keeps every command readable: `xfer send help`, `message send help`.
 	for _, w := range rest {
-		if w == "--help" || w == "-h" {
+		if w == "help" {
 			fmt.Fprintln(stderr, shellcmd.HelpText(path, cmd))
 			return nil
 		}
@@ -245,7 +245,12 @@ func runUnified(api *core.Engine, cfg config.Config, session *shellcmd.Session, 
 		// next prompt (visual separator, and picks up `use`/identity changes).
 		needPrint = true
 		session.History = append(session.History, line)
-		words := session.ExpandAlias(strings.Fields(line))
+		words, parseErr := shellcmd.SplitLine(line)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "  %s %s\n", ui.Fail.Sprint("[✗]"), ui.CodeSpan(parseErr.Error()))
+			continue
+		}
+		words = session.ExpandAlias(words)
 		if len(words) > 0 && strings.ToLower(words[0]) == "switch" {
 			if err := runSwitch(api, cfg, session, words[1:]); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s %s\n", ui.Fail.Sprint("[✗]"), ui.CodeSpan(err.Error()))
