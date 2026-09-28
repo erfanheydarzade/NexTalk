@@ -2,11 +2,9 @@
 #
 # Builds the `nextalk` CLI for every supported OS/arch, packages each as a
 # .tar.gz (.zip on Windows), generates checksums, and writes a changelog
-# from Conventional-Commit-style commit messages. The WASM build is NOT
-# handled here (GoReleaser's build matrix doesn't fit GOOS=js/GOARCH=wasm
-# well) — it's built and archived as an extra release asset by
-# .github/workflows/release.yml, which calls `cmd/nextalk-wasm/build.sh`
-# directly and uploads the result alongside these archives.
+# from Conventional-Commit-style commit messages. The WASM assets are built
+# by .github/workflows/release.yml before GoReleaser starts. release.extra_files
+# attaches those prebuilt files to the same draft GitHub Release as the CLI.
 #
 # Local test run (no publish): goreleaser release --snapshot --clean
 version: 2
