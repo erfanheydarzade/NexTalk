@@ -163,37 +163,26 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 		RouterURL:  outRouter,
 	}
 
-	// ── 2 & 3. Teach the transport the mailbox, then attach it ──────────
-	//
-	// Best-effort: the mailbox now exists server-side, so peers can already
-	// send to this identity even if the local transport is down. Only
-	// *receiving* needs the attach, so a failure here is reported as a
-	// warning rather than unwinding a successful registration.
+	// ── 2. Attach the exact mailbox returned by the selected Router ─────
+	// Both protocols use a 16-byte mailbox ID at the transport boundary.
+	// FileRelay already returns the real mailbox ID from /register, so there
+	// is no second resolve call and no FileTransport-only dependency here.
+	// Worker Relay returns the mailbox ID as lowercase hex, so decode it once
+	// before handing it to the transport.
 	tr, err := m.EnsureRunning(ctx, transportID)
 	if err != nil {
 		d.Human("[!] Registered, but transport %s is not running (%v).", transportID, err)
-		d.Human("    Run `transport register-identity` again once it starts to attach for receiving.")
-		return out, nil
-	}
-	ft, err := ntx.RequiresFile(tr)
-	if err != nil {
-		d.Human("[!] Registered, but %s cannot resolve mailbox aliases (%v).", transportID, err)
+		d.Human("    Run transport register-identity again once it starts to attach for receiving.")
 		return out, nil
 	}
 
-	// Resolving our own pubkey is what makes the transport record the
-	// alias → full-mailbox-id binding it needs to expand the alias later.
-	alias, resolvedShard, err := ft.XferResolve(ctx, cl.IdentityPublic, router)
-	if err != nil {
-		d.Human("[!] Registered, but resolving own mailbox through %s failed: %v", transportID, err)
-		return out, nil
+	mailbox, err := hex.DecodeString(mailboxIDDisplay)
+	if err != nil || len(mailbox) != 16 {
+		return nil, fmt.Errorf("router returned malformed mailbox_id for %s", transportID)
 	}
-	if resolvedShard != "" {
-		shard = resolvedShard
-	}
-	out.Alias = hex.EncodeToString(alias)
+	out.Alias = hex.EncodeToString(mailbox)
 
-	if err := tr.AttachMailbox(ctx, alias, secret, shard, router); err != nil {
+	if err := tr.AttachMailbox(ctx, mailbox, secret, shard, router); err != nil {
 		d.Human("[!] Registered, but attach failed: %v", err)
 		return out, nil
 	}
@@ -204,6 +193,7 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 		RouterURL:  router,
 		Owner:      identity,
 	})
+
 	out.Attached = true
 	out.ShardURL = shard
 
