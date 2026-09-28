@@ -68,7 +68,8 @@ const (
 	OpXferResume   uint8 = 13
 	OpXferGet      uint8 = 14
 	OpXferComplete uint8 = 15
-	OpXferCancel   uint8 = 16
+	OpXferCancel       uint8 = 16
+	OpIdentityRegister uint8 = 17
 )
 
 // StartStop actions.
@@ -136,7 +137,7 @@ func UnmarshalEnvelope(body []byte) (*Envelope, error) {
 			out.Payload = append([]byte(nil), f.Data...)
 		}
 	}
-	if out.Op != OpError && (out.Op < OpInitialize || out.Op > OpXferCancel) {
+	if out.Op != OpError && (out.Op < OpInitialize || out.Op > OpIdentityRegister) {
 		return nil, fmt.Errorf("transport: rpc: unknown op %d", out.Op)
 	}
 	return out, nil
