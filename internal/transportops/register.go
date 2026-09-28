@@ -2,7 +2,10 @@ package transportops
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -48,7 +51,7 @@ import (
 type IdentityRegistration struct {
 	Identity   string `json:"identity"`
 	Pubkey     string `json:"pubkey"`
-	MailboxID  string `json:"mailbox_id"`  // full 32-byte relay mailbox id
+	MailboxID  string `json:"mailbox_id"`  // router mailbox identifier
 	Alias      string `json:"alias"`       // 16-byte transport alias
 	ReadSecret string `json:"read_secret"` // redacted in human output
 	ShardURL   string `json:"shard_url"`
@@ -98,26 +101,66 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 	defer cancel()
 
 	// ── 1. Register the identity pubkey itself with the Router ──────────
-	rc := workerrelay.NewRouterClient(router)
-	cap, err := rc.Register(ctx, cl.IdentityPrivate)
-	if err != nil {
-		return nil, fmt.Errorf("router /register for %s: %w", shortHex(pubHex), err)
-	}
-	if cap.MailboxID == "" || cap.ReadSecret == "" || cap.ShardURL == "" {
-		return nil, fmt.Errorf("router /register returned an incomplete capability")
-	}
-	secret, err := hex.DecodeString(cap.ReadSecret)
-	if err != nil || len(secret) != 32 {
-		return nil, fmt.Errorf("router /register returned a malformed read_secret")
+	// Worker Relay and FileRelay deliberately have different wire protocols.
+	// Keep the Worker Relay client intact, but use the FileRelay transport RPC
+	// when the selected transport is FileRelay. The private key never leaves
+	// NexTalk core; FileRelay receives only the signed registration proof.
+	var mailboxIDDisplay string
+	var mailboxID, secret []byte
+	var shard, outRouter string
+	var readSecret string
+
+	if transportID == "filerelay" {
+		tr, err := m.EnsureRunning(ctx, transportID)
+		if err != nil {
+			return nil, fmt.Errorf("start filerelay transport: %w", err)
+		}
+		ir, ok := tr.(interface {
+			IdentityRegister(ctx context.Context, pubkey []byte, timestamp uint64, nonce, signature []byte, routerURL string) (mailboxID, readSecret []byte, shardURL, outRouter string, err error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("filerelay transport does not support identity registration; install the updated filerelay .ntx")
+		}
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, fmt.Errorf("generate register nonce: %w", err)
+		}
+		ts := uint64(time.Now().UnixMilli())
+		sig := ed25519.Sign(cl.IdentityPrivate, canonicalFileRelayRegister(cl.IdentityPublic, ts, nonce))
+		mailboxID, secret, shard, outRouter, err = ir.IdentityRegister(ctx, cl.IdentityPublic, ts, nonce[:], sig, router)
+		if err != nil {
+			return nil, fmt.Errorf("filerelay /register for %s: %w", shortHex(pubHex), err)
+		}
+		if len(mailboxID) != 16 || len(secret) != 32 || shard == "" {
+			return nil, fmt.Errorf("filerelay /register returned an incomplete capability")
+		}
+		readSecret = hex.EncodeToString(secret)
+		mailboxIDDisplay = hex.EncodeToString(mailboxID)
+	} else {
+		rc := workerrelay.NewRouterClient(router)
+		cap, err := rc.Register(ctx, cl.IdentityPrivate)
+		if err != nil {
+			return nil, fmt.Errorf("router /register for %s: %w", shortHex(pubHex), err)
+		}
+		if cap.MailboxID == "" || cap.ReadSecret == "" || cap.ShardURL == "" {
+			return nil, fmt.Errorf("router /register returned an incomplete capability")
+		}
+		secret, err = hex.DecodeString(cap.ReadSecret)
+		if err != nil || len(secret) != 32 {
+			return nil, fmt.Errorf("router /register returned a malformed read_secret")
+		}
+		mailboxIDDisplay = cap.MailboxID
+		shard, outRouter = cap.ShardURL, router
+		readSecret = cap.ReadSecret
 	}
 
 	out := &IdentityRegistration{
 		Identity:   identity,
 		Pubkey:     pubHex,
-		MailboxID:  cap.MailboxID,
-		ReadSecret: cap.ReadSecret,
-		ShardURL:   cap.ShardURL,
-		RouterURL:  router,
+		MailboxID:  mailboxIDDisplay,
+		ReadSecret: readSecret,
+		ShardURL:   shard,
+		RouterURL:  outRouter,
 	}
 
 	// ── 2 & 3. Teach the transport the mailbox, then attach it ──────────
@@ -140,13 +183,13 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 
 	// Resolving our own pubkey is what makes the transport record the
 	// alias → full-mailbox-id binding it needs to expand the alias later.
-	alias, shard, err := ft.XferResolve(ctx, cl.IdentityPublic, router)
+	alias, resolvedShard, err := ft.XferResolve(ctx, cl.IdentityPublic, router)
 	if err != nil {
 		d.Human("[!] Registered, but resolving own mailbox through %s failed: %v", transportID, err)
 		return out, nil
 	}
-	if shard == "" {
-		shard = cap.ShardURL
+	if resolvedShard != "" {
+		shard = resolvedShard
 	}
 	out.Alias = hex.EncodeToString(alias)
 
@@ -156,7 +199,7 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 	}
 	_ = m.AddAttachment(transportID, ntx.Attachment{
 		MailboxID:  out.Alias,
-		ReadSecret: cap.ReadSecret,
+		ReadSecret: readSecret,
 		ShardURL:   shard,
 		RouterURL:  router,
 		Owner:      identity,
@@ -172,11 +215,23 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 	d.Human("pubkey:     %s", pubHex)
 	d.Human("mailbox:    %s", out.MailboxID)
 	d.Human("alias:      %s", out.Alias)
-	d.Human("read_secret:%s", d.Secret(cap.ReadSecret))
+	d.Human("read_secret:%s", d.Secret(readSecret))
 	d.Human("shard:      %s", shard)
 	d.Human("")
 	d.Human("[i] Peers can now reach you by pubkey. Next: `peer connect <peer>`.")
 	return out, nil
+}
+
+func canonicalFileRelayRegister(pub []byte, timestamp uint64, nonce [16]byte) []byte {
+	const domain = "FR1/REGISTER\x00"
+	out := make([]byte, 0, len(domain)+32+8+16)
+	out = append(out, domain...)
+	out = append(out, pub...)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], timestamp)
+	out = append(out, b[:]...)
+	out = append(out, nonce[:]...)
+	return out
 }
 
 // routerURLFor recovers a router URL from stored transport config, then from
