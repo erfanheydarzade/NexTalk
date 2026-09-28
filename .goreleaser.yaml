@@ -73,6 +73,11 @@ archives:
     formats: [binary]
 checksum:
   name_template: "checksums.txt"
+  extra_files:
+    - glob: ./nextalk-wasm_{{ .Tag }}.tar.gz
+    - glob: ./nextalk_{{ .Tag }}.wasm
+    - glob: ./wasm_exec_{{ .Tag }}.js
+    - glob: ./nextalk-wasm_{{ .Tag }}.version.json
 changelog:
   # A concise, human-clean release body instead of the raw commit log:
   # grouped by type, with merge commits and CI noise filtered out.
@@ -97,18 +102,29 @@ changelog:
     - title: "Other"
       order: 999
 release:
+  # Keep the release as a draft while GoReleaser uploads the complete asset
+  # set. The workflow publishes it only after GoReleaser succeeds.
+  draft: true
+  replace_existing_draft: true
+  preflight:
+    fail_on_error: true
+
   name_template: "NexTalk {{ .Version }}"
   header: |
     ## NexTalk {{ .Version }}
     Prebuilt binaries for Linux, macOS and Windows are below, plus a
-    browser/WebAssembly build, uploaded separately by the release workflow:
-    the full bundle (`nextalk-wasm_{{ .Version }}.tar.gz`) and, if you just
-    want the two files with no extracting, the loose
-    `nextalk_{{ .Version }}.wasm` + `wasm_exec_{{ .Version }}.js` (plus a
-    `nextalk-wasm_{{ .Version }}.version.json` manifest). See
+    browser/WebAssembly build, assembled into this same release before
+    publication: the full bundle (`nextalk-wasm_{{ .Tag }}.tar.gz`) and the
+    loose `nextalk_{{ .Tag }}.wasm` + `wasm_exec_{{ .Tag }}.js` (plus the
+    `nextalk-wasm_{{ .Tag }}.version.json` manifest). See
     [`docs/wasm.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/wasm.md)
     for how to run the WASM build, and
     [`docs/adding-a-transport.md`](https://github.com/erfanheydarzade/NexTalk/blob/{{ .Tag }}/docs/adding-a-transport.md)
     to add a new transport backend.
   footer: |
     **Full Changelog**: https://github.com/erfanheydarzade/NexTalk/compare/{{ .PreviousTag }}...{{ .Tag }}
+  extra_files:
+    - glob: ./nextalk-wasm_{{ .Tag }}.tar.gz
+    - glob: ./nextalk_{{ .Tag }}.wasm
+    - glob: ./wasm_exec_{{ .Tag }}.js
+    - glob: ./nextalk-wasm_{{ .Tag }}.version.json
