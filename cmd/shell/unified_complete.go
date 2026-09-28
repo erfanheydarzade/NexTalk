@@ -13,7 +13,7 @@ import (
 )
 
 // unifiedCompleter completes the unified command tree: group and leaf names,
-// --flag names, and value slots (peers, identities, threads, transports).
+// named parameters, and value slots (peers, identities, threads, transports).
 // It re-reads live state on every keystroke, exactly like the legacy
 // per-transport completer.
 type unifiedCompleter struct {
@@ -63,24 +63,30 @@ func (c *unifiedCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	}
 
 	rest := typed[consumed:]
-	// File paths complete after -f/--file/--out.
+	// A parameter name is completed as a normal command word. Once a value
+	// parameter has been entered, complete its value; booleans complete as
+	// standalone words.
 	if len(rest) > 0 {
 		prev := rest[len(rest)-1]
-		if prev == "-f" || prev == "--file" || prev == "--out" || prev == "-o" {
-			return suffixes(candidateFiles(fragment), fragment), utf8.RuneCountInString(fragment)
+		for _, f := range cmd.Flags {
+			if prev == f.Name && !f.IsBool {
+				if f.Name == "file" || f.Name == "out" {
+					return suffixes(candidateFiles(fragment), fragment), utf8.RuneCountInString(fragment)
+				}
+				return nil, 0
+			}
 		}
 	}
-	// Flag names complete after "--".
-	if strings.HasPrefix(fragment, "--") {
+	if len(rest) == 0 || (len(rest) > 0 && isParameterPrefix(rest[len(rest)-1], cmd.Flags)) {
 		var names []string
 		for _, f := range cmd.Flags {
-			names = append(names, "--"+f.Name)
+			names = append(names, f.Name)
 		}
-		names = append(names, "--help")
+		names = append(names, "help")
 		return suffixes(names, fragment), utf8.RuneCountInString(fragment)
 	}
 	// Positional value slots.
-	argIndex := len(rest)
+	argIndex := countPositionalArgs(rest, cmd.Flags)
 	kind := registry.ArgText
 	if argIndex < len(cmd.Args) {
 		kind = cmd.Args[argIndex]
@@ -88,6 +94,32 @@ func (c *unifiedCompleter) Do(line []rune, pos int) ([][]rune, int) {
 		kind = cmd.Variadic
 	}
 	return suffixes(c.candidates(kind), fragment), utf8.RuneCountInString(fragment)
+}
+
+func isParameterPrefix(word string, flags []shellcmd.Flag) bool {
+	for _, f := range flags {
+		if word == f.Name && !f.IsBool {
+			return true
+		}
+	}
+	return false
+}
+
+func countPositionalArgs(rest []string, flags []shellcmd.Flag) int {
+	count := 0
+	for i := 0; i < len(rest); i++ {
+		for _, f := range flags {
+			if rest[i] == f.Name {
+				if !f.IsBool && i+1 < len(rest) {
+					i++
+				}
+				goto next
+			}
+		}
+		count++
+	next:
+	}
+	return count
 }
 
 func sessionAliasKeys(s *shellcmd.Session) []string {
