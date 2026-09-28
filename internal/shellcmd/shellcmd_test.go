@@ -6,17 +6,17 @@ import (
 )
 
 func TestSplitLineQuotes(t *testing.T) {
-	cases := []struct { line, want string }{
-		{`xfer send --file "C:\\Users\\mahmo\\Desktop\\my file.png" --to peer`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\my file.png|--to|peer`},
-		{`xfer send --file 'C:\\Users\\mahmo\\Desktop\\my file.png' --to peer`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\my file.png|--to|peer`},
-		{`xfer send --file "C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png"`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png`},
-	}
-	for _, tc := range cases {
-		got, err := SplitLine(tc.line)
-		if err != nil { t.Fatalf("SplitLine(%q): %v", tc.line, err) }
-		if strings.Join(got, "|") != tc.want { t.Fatalf("SplitLine(%q) = %#v, want %q", tc.line, got, tc.want) }
-	}
-	if _, err := SplitLine(`xfer send --file "unterminated`); err == nil { t.Fatal("unterminated quote must fail") }
+    cases := []struct { line, want string }{
+        {`xfer send file "C:\\Users\\mahmo\\Desktop\\my file.png" to peer`, `xfer|send|file|C:\\Users\\mahmo\\Desktop\\my file.png|to|peer`},
+        {`xfer send file 'C:\\Users\\mahmo\\Desktop\\my file.png' to peer`, `xfer|send|file|C:\\Users\\mahmo\\Desktop\\my file.png|to|peer`},
+        {`xfer send file "C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png"`, `xfer|send|file|C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png`},
+    }
+    for _, tc := range cases {
+        got, err := SplitLine(tc.line)
+        if err != nil { t.Fatalf("SplitLine(%q): %v", tc.line, err) }
+        if strings.Join(got, "|") != tc.want { t.Fatalf("SplitLine(%q) = %#v, want %q", tc.line, got, tc.want) }
+    }
+    if _, err := SplitLine(`xfer send file "unterminated`); err == nil { t.Fatal("unterminated quote must fail") }
 }
 func TestParseBasic(t *testing.T) {
 	spec := []Flag{
@@ -25,7 +25,7 @@ func TestParseBasic(t *testing.T) {
 		{Name: "json", IsBool: true},
 		{Name: "limit", Default: "32"},
 	}
-	pos, vals, err := Parse([]string{"bob", "--to", "alice", "-f", "a.bin", "--json", "--limit=10"}, spec)
+	pos, vals, err := Parse([]string{"bob", "to", "alice", "file", "a.bin", "json", "limit", "10"}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +42,9 @@ func TestParseErrors(t *testing.T) {
 	cases := [][]string{
 		{"--bogus", "x"},
 		{"-z"},
-		{"--to"},
+		{"to"},
 		{},
-		{"--json=maybe"},
+		{"json", "maybe"},
 	}
 	for i, argv := range cases {
 		if _, _, err := Parse(argv, spec); err == nil {
@@ -162,13 +162,13 @@ func TestHelpText(t *testing.T) {
 		Flags: []Flag{{Name: "to", Usage: "peer", Required: true}, {Name: "json", Usage: "json", IsBool: true}},
 	}
 	h := HelpText([]string{"xfer", "send"}, c)
-	for _, want := range []string{"xfer send", "--to", "(required)", "upload", "Longer"} {
+	for _, want := range []string{"xfer send", "to <value>", "(required)", "upload", "Longer"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("help missing %q:\n%s", want, h)
 		}
 	}
 	u := Usage([]string{"xfer", "send"}, c)
-	if !strings.Contains(u, "--to value") || !strings.Contains(u, "[--json]") {
+	if !strings.Contains(u, "to <value>") || !strings.Contains(u, "[json]") {
 		t.Fatalf("usage: %q", u)
 	}
 }
