@@ -72,10 +72,10 @@ archives:
 checksum:
   name_template: "checksums.txt"
   extra_files:
-    - glob: ./nextalk-wasm_{{ .Tag }}.tar.gz
-    - glob: ./nextalk_{{ .Tag }}.wasm
-    - glob: ./wasm_exec_{{ .Tag }}.js
-    - glob: ./nextalk-wasm_{{ .Tag }}.version.json
+    - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.tar.gz
+    - glob: ./dist-release/nextalk_{{ .Tag }}.wasm
+    - glob: ./dist-release/wasm_exec_{{ .Tag }}.js
+    - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.version.json
 changelog:
   # A concise, human-clean release body instead of the raw commit log:
   # grouped by type, with merge commits and CI noise filtered out.
