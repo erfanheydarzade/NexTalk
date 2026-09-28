@@ -19,7 +19,10 @@ import (
 // execute runs one input line through alias expansion, the command tree,
 // and the shared handlers. It returns a sentinel error for exit.
 func execute(reg *shellcmd.Registry, session *shellcmd.Session, line string, stdout, stderr io.Writer) error {
-	words := strings.Fields(line)
+	words, err := shellcmd.SplitLine(line)
+	if err != nil {
+		return fmt.Errorf("parse command line: %v", err)
+	}
 	if len(words) == 0 {
 		return nil
 	}
@@ -113,7 +116,16 @@ func RunScript(reg *shellcmd.Registry, session *shellcmd.Session, r io.Reader, s
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		first := strings.ToLower(strings.Fields(line)[0])
+		words, err := shellcmd.SplitLine(line)
+		if err != nil {
+			fmt.Fprintf(stderr, "  %s %s\n", ui.Fail.Sprint("[✗]"), ui.CodeSpan(fmt.Sprintf("parse command line: %v", err)))
+			code = 1
+			continue
+		}
+		if len(words) == 0 {
+			continue
+		}
+		first := strings.ToLower(words[0])
 		if first == "switch" {
 			fmt.Fprintf(stderr, "  %s %s\n", ui.Fail.Sprint("[✗]"), "`switch` is interactive-only")
 			code = 1
