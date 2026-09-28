@@ -16,7 +16,7 @@ job. Everything is driven by `.github/workflows/release.yml`.
 That single button builds one complete release and publishes it only after every asset is attached:
 
 1. Validates the version string and creates+pushes the git tag (skipped
-   if the tag already exists — re-running for the same version is safe).
+   if the tag already exists). Re-running a version after publication is not supported because immutable releases are frozen.
 2. Runs `go vet` and `go test ./...` against that tag.
 3. Runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`) to
    cross-compile `nextalk` for:
@@ -53,7 +53,7 @@ git tag -a v1.4.0 -m "Release v1.4.0"
 git push origin v1.4.0
 ```
 
-This runs the exact same build/publish steps as the button above.
+This runs the exact same complete build-and-publish pipeline. For manual dispatches, the prerelease checkbox controls the final publication; tag pushes rely on semver pre-release notation such as `-rc.1`.
 
 ## Version stamping
 
@@ -65,12 +65,14 @@ workflow gets `dev` for all three fields.
 
 ## Local dry run
 
-To sanity-check the CLI archives without publishing anything:
+To sanity-check the CLI archives and WASM staging without publishing anything:
 
 ```bash
 go install github.com/goreleaser/goreleaser/v2@latest
 goreleaser release --snapshot --clean
 ```
+
+The workflow's release upload step itself is intentionally tested only through the real draft-release path, because that is where GitHub asset publication and immutability behavior are exercised.
 
 Output lands in `dist/` (gitignored) and nothing is pushed or uploaded.
 
