@@ -30,11 +30,11 @@ import (
 	"github.com/erfanheydarzade/NexTalk/internal/ui"
 )
 
-// Flag describes one `--name value` / `-n value` / `--bool` option.
+// Flag describes one named shell parameter such as `to <peer>` or bare `json`.
 type Flag struct {
-	// Name is the long form without dashes, e.g. "transports-dir".
+	// Name is the parameter name, e.g. "transports-dir".
 	Name string
-	// Short is the single-letter form without the dash, e.g. "i".
+	// Short is retained only for compatibility with shared command metadata; the unified shell does not expose short flags.
 	Short string
 	// Usage is the one-line help text.
 	Usage string
@@ -73,7 +73,7 @@ type Command struct {
 	// Complete, when non-nil, fully owns candidate selection (mirrors
 	// registry.CommandSpec.Complete but receives the shell session).
 	Complete func(s *Session, typed []string, argIndex int, fragment string) []string
-	// Flags accepted by this command.
+	// Named parameters accepted by this command.
 	Flags []Flag
 	// Run executes the command. Returning an error prints a clear message
 	// and (in scripting mode) sets a nonzero exit code.
@@ -147,10 +147,10 @@ func Usage(path []string, c *Command) string {
 	}
 	for _, f := range c.Flags {
 		if f.IsBool {
-			fmt.Fprintf(&sb, " [--%s]", f.Name)
+			fmt.Fprintf(&sb, " [%s]", f.Name)
 			continue
 		}
-		fmt.Fprintf(&sb, " [--%s value]", f.Name)
+		fmt.Fprintf(&sb, " [%s <value>]", f.Name)
 	}
 	return sb.String()
 }
@@ -170,15 +170,11 @@ func HelpText(path []string, c *Command) string {
 		fmt.Fprintf(&sb, "\n%s %s\n", ui.Title.Sprint("Aliases:"), ui.Code.Sprint(strings.Join(c.Aliases, ", ")))
 	}
 	if len(c.Flags) > 0 {
-		sb.WriteString("\n" + ui.Title.Sprint("Flags:") + "\n")
+		sb.WriteString("\n" + ui.Title.Sprint("Parameters:") + "\n")
 		names := make([]Flag, len(c.Flags))
 		copy(names, c.Flags)
 		sort.Slice(names, func(i, j int) bool { return names[i].Name < names[j].Name })
 		for _, f := range names {
-			short := ""
-			if f.Short != "" {
-				short = ", -" + f.Short
-			}
 			req := ""
 			if f.Required {
 				req = " (required)"
@@ -191,10 +187,11 @@ func HelpText(path []string, c *Command) string {
 			if req != "" {
 				reqColored = ui.Warning.Sprint(req)
 			}
-			fmt.Fprintf(&sb, "  %s%s  %s%s%s\n", ui.Code.Sprint("--"+f.Name+short), "", f.Usage, reqColored, ui.Comment.Sprint(def))
-			// Keep a plain copy of the required marker for substring
-			// matching (colors wrap it above): the raw text is already
-			// embedded in the colored spans' content.
+			syntax := f.Name
+			if !f.IsBool {
+				syntax += " <value>"
+			}
+			fmt.Fprintf(&sb, "  %s  %s%s%s\n", ui.Code.Sprint(syntax), f.Usage, reqColored, ui.Comment.Sprint(def))
 		}
 	}
 	return sb.String()
