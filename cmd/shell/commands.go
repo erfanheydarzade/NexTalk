@@ -988,6 +988,18 @@ func buildRegistry() *shellcmd.Registry {
 			}
 			cmd, _, path := r.Resolve(ctx.Args)
 			if cmd == nil {
+				if len(path) == len(ctx.Args) && len(path) > 0 {
+					children := r.Children(path)
+					if len(children) > 0 {
+						d.Human("Usage: %s <command>", strings.Join(path, " "))
+						d.Human("")
+						d.Human("Subcommands:")
+						for _, child := range children {
+							d.Human("  %-10s %s", child, "run `help "+strings.Join(append(append([]string{}, path...), child), " ")+"`")
+						}
+						return nil
+					}
+				}
 				if sug := shellcmd.Suggest(r, strings.Join(ctx.Args, " ")); len(sug) > 0 {
 					return fmt.Errorf("unknown command %q; did you mean: %s?",
 						strings.Join(ctx.Args, " "), strings.Join(sug, ", "))
