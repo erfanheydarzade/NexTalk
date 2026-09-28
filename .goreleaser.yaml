@@ -122,7 +122,7 @@ release:
   footer: |
     **Full Changelog**: https://github.com/erfanheydarzade/NexTalk/compare/{{ .PreviousTag }}...{{ .Tag }}
   extra_files:
-    - glob: ./nextalk-wasm_{{ .Tag }}.tar.gz
-    - glob: ./nextalk_{{ .Tag }}.wasm
-    - glob: ./wasm_exec_{{ .Tag }}.js
-    - glob: ./nextalk-wasm_{{ .Tag }}.version.json
+    - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.tar.gz
+    - glob: ./dist-release/nextalk_{{ .Tag }}.wasm
+    - glob: ./dist-release/wasm_exec_{{ .Tag }}.js
+    - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.version.json
