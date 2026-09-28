@@ -186,7 +186,7 @@ func (c *unifiedCompleter) candidates(kind registry.ArgKind) []string {
 	}
 }
 
-// candidateFiles completes local file paths for -f/--file style slots.
+// candidateFiles completes local file paths for file/out parameter slots.
 // Reserved for commands that opt in; unused slots stay silent.
 func candidateFiles(fragment string) []string {
 	dir, partial := filepath.Split(fragment)
