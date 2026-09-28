@@ -36,6 +36,9 @@ type FileTransport interface {
 	XferCancel(ctx context.Context, transferID, mailboxID, readSecret []byte) error
 	// RegisterBox mints a mailbox via the transport's scoped credential.
 	XferRegister(ctx context.Context, userTag, routerURL string) (mailboxID, readSecret []byte, shardURL, outRouter string, err error)
+	// IdentityRegister registers the actual NexTalk Ed25519 identity with the FileRelay router.
+	// The private key never leaves NexTalk core; the transport receives only the signed proof.
+	IdentityRegister(ctx context.Context, pubkey []byte, timestamp uint64, nonce, signature []byte, routerURL string) (mailboxID, readSecret []byte, shardURL, outRouter string, err error)
 	// XferResolve maps a recipient pubkey to its mailbox + shard.
 	XferResolve(ctx context.Context, recipientPub []byte, routerURL string) (mailboxID []byte, shardURL string, err error)
 }
@@ -225,6 +228,22 @@ func (t *ProcessTransport) XferCancel(ctx context.Context, transferID, mailboxID
 		return &RPCError{Code: ErrTransport, Detail: ack.Detail}
 	}
 	return nil
+}
+
+func (t *ProcessTransport) IdentityRegister(ctx context.Context, pubkey []byte, timestamp uint64, nonce, signature []byte, routerURL string) ([]byte, []byte, string, string, error) {
+	body, err := MarshalIdentityRegisterReq(pubkey, timestamp, nonce, signature, routerURL)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	env, err := t.proc.Call(ctx, OpIdentityRegister, body)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	res, err := UnmarshalRegisterResult(env.Payload)
+	if err != nil {
+		return nil, nil, "", "", err
+	}
+	return res.MailboxID, res.ReadSecret, res.ShardURL, res.RouterURL, nil
 }
 
 func (t *ProcessTransport) XferRegister(ctx context.Context, userTag, routerURL string) ([]byte, []byte, string, string, error) {
