@@ -83,10 +83,14 @@ func TestIngestDuplicateIsNotAnError(t *testing.T) {
 		t.Fatalf("thread has %d messages after dup ingest, want 1", len(msgs))
 	}
 
-	// And a plain DM through the same standard path still works. Alice is
-	// reloaded from disk first — the fan-out above persisted an advanced
-	// ratchet, exactly as a second process would see it.
+	// And a plain DM through the same standard path still works after the
+	// group delivery advanced both ratchets. Reload both identities to model
+	// the process boundary explicitly rather than using the stale test handle.
 	freshAlice, err := Client.LoadClient(alice.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshBob, err := Client.LoadClient(bob.Id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +98,7 @@ func TestIngestDuplicateIsNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev3, err := Ingest(bob, nil, fan, frame.Wrap(frame.TypeMessage, cipher))
+	ev3, err := Ingest(freshBob, nil, fan, frame.Wrap(frame.TypeMessage, cipher))
 	if err != nil || ev3.Kind != "message" || ev3.Sender != alice.Id {
 		t.Fatalf("dm ingest = %+v, %v", ev3, err)
 	}
