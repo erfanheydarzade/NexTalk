@@ -42,3 +42,7 @@ web/wasm/
 
 # python test scratch build dir (see test.py)
 .testbuild/
+
+# Release-only generated staging files. Never commit them.
+dist-wasm/
+dist-release/
