@@ -57,10 +57,9 @@ func TestParseErrors(t *testing.T) {
 			t.Fatalf("case %d must fail", i)
 		}
 	}
-	if _, _, _ = r.Resolve([]string{"nope"}); true {
-		if cmd, _, _ := r.Resolve([]string{"nope"}); cmd != nil {
-			t.Fatal("unknown must not resolve")
-		}
+	r := NewRegistry()
+	if cmd, _, _ := r.Resolve([]string{"nope"}); cmd != nil {
+		t.Fatal("unknown must not resolve")
 	}
 }
 
