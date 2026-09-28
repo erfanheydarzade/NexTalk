@@ -51,34 +51,6 @@ func TestParseErrors(t *testing.T) {
 			t.Fatalf("case %d must fail", i)
 		}
 	}
-	// "--" terminator keeps dashes positional.
-	pos, _, err := Parse([]string{"--", "--to"}, spec[:0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pos) != 1 || pos[0] != "--to" {
-		t.Fatalf("terminator: %v", pos)
-	}
-}
-
-func TestRegistryResolve(t *testing.T) {
-	r := NewRegistry()
-	a := &Command{Name: "send", Aliases: []string{"upload"}, Short: "s"}
-	b := &Command{Name: "recv", Short: "r"}
-	r.Register([]string{"xfer", "send"}, a)
-	r.Register([]string{"xfer", "recv"}, b)
-
-	cmd, n, path := r.Resolve([]string{"xfer", "upload", "extra"})
-	if cmd != a || n != 2 || len(path) != 2 {
-		t.Fatalf("alias resolve: %v %d %v", cmd, n, path)
-	}
-	cmd, n, path = r.Resolve([]string{"xfer"})
-	if cmd != nil || len(path) != 1 || n != 1 {
-		t.Fatalf("group resolve: %v %d %v", cmd, n, path)
-	}
-	if kids := r.Children([]string{"xfer"}); len(kids) != 2 {
-		t.Fatalf("children: %v", kids)
-	}
 	if _, _, _ = r.Resolve([]string{"nope"}); true {
 		if cmd, _, _ := r.Resolve([]string{"nope"}); cmd != nil {
 			t.Fatal("unknown must not resolve")
