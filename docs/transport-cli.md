@@ -62,11 +62,39 @@ running transports.
 ## `transport config <id> <json>`
 
 Stores an opaque config blob passed to the transport at the next start.
-Example (FileRelay bridge needs its router):
+
+For FileRelay:
+
+```json
+{"router_url":"http://127.0.0.1:8080"}
+```
+
+### Bash / POSIX shells
+
+Pass the JSON as one single-quoted argument:
 
 ```bash
 nextalk transport config filerelay '{"router_url":"http://127.0.0.1:8080"}'
 ```
+
+### Windows PowerShell
+
+PowerShell users should escape the embedded JSON quotes with backslashes when
+passing JSON directly to `nextalk.exe`:
+
+```powershell
+.\nextalk transport config filerelay '{\"router_url\":\"http://127.0.0.1:8080\"}'
+```
+
+The same form works for arbitrary JSON objects:
+
+```powershell
+.\nextalk transport config filerelay '{\"x\":\"y\"}'
+```
+
+Do **not** add backslashes to the JSON value stored by the transport. They are
+only required here so the Windows command-line argument reaches NexTalk as the
+intended JSON string.
 
 ## `transport attach <id> --mailbox <hex> --secret <hex> --shard <url> [--router <url>]`
 
@@ -83,8 +111,7 @@ Starts the transport if enabled-but-stopped, pushes stored attachments over
 RPC, polls up to `--limit` (default 32, max 32) frames per mailbox, and runs
 every frame through shared dispatch — decrypting with `-i`'s sessions and
 persisting to its mailbox, exactly like `worker listen`. Session progress is
-saved afterwards. Replies (handshake answers) go back out over the same
-transport. `--mailbox` restricts the poll to one attachment.
+saved afterwards. `--mailbox` restricts the poll to one attachment.
 
 ## `transport send-frame <id> [--to <peer|pub> | --mailbox <hex> --shard <url>] -f frame.bin`
 
@@ -101,11 +128,11 @@ Mints a mailbox via the transport's scoped credential (FileRelay bridge:
 per-identity keypair — tag derived internally as `hex(sha256(peerID)[:8])`,
 so two peers never collide on the same mailbox). `-i/--id` is required in
 one-shot CLI (no session fallback). `--router` is optional when stored via
-`transport config <id> '{"router_url":"..."}'` or a prior attach. Prints
-JSON with `mailbox_id`, `read_secret`, `shard_url`, `router_url` (`user_tag`
-is internal and no longer exposed) and auto-attaches the mailbox — no manual
-`attach` needed; re-register upserts and refreshes `read_secret` on rotation.
-Keep `read_secret` private.
+`transport config <id> '{\"router_url\":\"...\"}'` or a prior attach. Prints
+JSON with `mailbox_id`, `read_secret`, `shard_url`, `router_url`
+(`user_tag` is internal and no longer exposed) and auto-attaches the mailbox
+— no manual `attach` needed; re-register upserts and refreshes
+`read_secret` on rotation. Keep `read_secret` private.
 
 ## `transport resolve <id> --to <peer|pub> --router <url>`
 
