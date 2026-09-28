@@ -6,10 +6,8 @@ name: Release
 # WASM bundle, and publishes everything as one GitHub Release with an
 # auto-generated changelog.
 #
-# Re-running this workflow for a version that's already released is safe:
-# the "Tag release" step is a no-op if the tag already exists, and
-# goreleaser + the release action simply update the existing release's
-# assets/notes rather than failing.
+# Re-running this workflow is safe only while its release is still a draft.
+# Once GitHub publishes the release, immutability freezes the tag and assets.
 on:
   workflow_dispatch:
     inputs:
@@ -104,7 +102,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
 
-      # --- Browser/WASM bundle: nextalk.wasm + wasm_exec.js + the demo page ---
+      # --- Browser/WASM bundle and loose assets ---
+      # Build these files before GoReleaser so it can attach them to the
+      # same draft release as the CLI archives.
       - name: Build WASM bundle
         run: |
           set -euo pipefail
@@ -146,6 +146,17 @@ jobs:
           printf '{\n  "version": "%s",\n  "api": "2",\n  "files": {\n    "wasm": "nextalk_%s.wasm",\n    "glue": "wasm_exec_%s.js"\n  }\n}\n' \
             "${RELEASE_TAG}" "${RELEASE_TAG}" "${RELEASE_TAG}" > "nextalk-wasm_${RELEASE_TAG}.version.json"
 
+      # --- CLI: linux/darwin/windows x amd64/arm64(/armv7) -> tar.gz/zip ---
+      - name: Run GoReleaser (CLI archives)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
+
       - name: Upload WASM bundle to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -157,9 +168,21 @@ jobs:
             "nextalk-wasm_${RELEASE_TAG}.version.json" \
             --repo "${{ github.repository }}" --clobber
 
-      - name: Mark pre-release if requested
-        if: github.event_name == 'workflow_dispatch' && inputs.prerelease
+      # No assets are uploaded after GoReleaser. This only publishes the
+      # already-complete draft release, which is the point where GitHub
+      # applies release immutability.
+      - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "${RELEASE_TAG}" --repo "${{ github.repository }}" --prerelease
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.prerelease }}" == "true" ]]; then
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${{ github.repository }}" \
+              --draft=false \
+              --prerelease
+          else
+            gh release edit "${RELEASE_TAG}" \
+              --repo "${{ github.repository }}" \
+              --draft=false
+          fi
