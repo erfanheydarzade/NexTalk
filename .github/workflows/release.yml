@@ -97,6 +97,8 @@ jobs:
       - name: Build WASM bundle
         run: |
           set -euo pipefail
+          rm -rf dist-wasm dist-release
+          mkdir -p dist-release
           NEXTALK_VERSION="${RELEASE_TAG}" bash ./cmd/nextalk-wasm/build.sh dist-wasm/web/wasm
           cp web/index.html dist-wasm/web/index.html
           cp README.md LICENSE dist-wasm/
@@ -119,7 +121,7 @@ jobs:
           then open http://localhost:8000/web/ — see docs/wasm.md for
           details and the full JS API.
           EOF
-          tar -C dist-wasm -czf "nextalk-wasm_${RELEASE_TAG}.tar.gz" .
+          tar -C dist-wasm -czf "dist-release/nextalk-wasm_${RELEASE_TAG}.tar.gz" .
 
       # --- Loose WASM assets: for people who just want to grab the two
       # files and drop them in their own web app, with no tar/extract step
@@ -130,10 +132,10 @@ jobs:
       - name: Stage loose WASM assets
         run: |
           set -euo pipefail
-          cp dist-wasm/web/wasm/nextalk.wasm "nextalk_${RELEASE_TAG}.wasm"
-          cp dist-wasm/web/wasm/wasm_exec.js "wasm_exec_${RELEASE_TAG}.js"
+          cp dist-wasm/web/wasm/nextalk.wasm "dist-release/nextalk_${RELEASE_TAG}.wasm"
+          cp dist-wasm/web/wasm/wasm_exec.js "dist-release/wasm_exec_${RELEASE_TAG}.js"
           printf '{\n  "version": "%s",\n  "api": "2",\n  "files": {\n    "wasm": "nextalk_%s.wasm",\n    "glue": "wasm_exec_%s.js"\n  }\n}\n' \
-            "${RELEASE_TAG}" "${RELEASE_TAG}" "${RELEASE_TAG}" > "nextalk-wasm_${RELEASE_TAG}.version.json"
+            "${RELEASE_TAG}" "${RELEASE_TAG}" "${RELEASE_TAG}" > "dist-release/nextalk-wasm_${RELEASE_TAG}.version.json"
 
       # --- CLI + WASM assets -> one complete draft GitHub Release ---
       - name: Run GoReleaser
