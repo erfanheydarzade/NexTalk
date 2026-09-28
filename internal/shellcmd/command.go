@@ -133,7 +133,7 @@ func (c *Context) JSON() bool {
 }
 
 // ShowSecrets reports whether secret values may be printed verbatim.
-// Default is redaction; only an explicit --show-secrets opts in.
+// Default is redaction; secrets stay redacted unless the named parameter is enabled.
 func (c *Context) ShowSecrets() bool {
 	return c.Bool("show-secrets") || (c.Session != nil && c.Session.ShowSecrets)
 }
@@ -156,7 +156,7 @@ func Usage(path []string, c *Command) string {
 }
 
 // HelpText renders full help for a command, with a colorized Usage header,
-// section titles and flag names. Plain substrings ("Usage:", "--to",
+// section titles and parameter names. Plain substrings ("Usage:", "to",
 // "(required)", aliases, Long) are preserved so scripts/tests can still
 // match on them; colors are no-ops when piped.
 func HelpText(path []string, c *Command) string {
