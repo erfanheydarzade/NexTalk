@@ -13,7 +13,7 @@ job. Everything is driven by `.github/workflows/release.yml`.
      as "Latest release".
 3. Click **Run workflow**.
 
-That single button:
+That single button builds one complete release and publishes it only after every asset is attached:
 
 1. Validates the version string and creates+pushes the git tag (skipped
    if the tag already exists — re-running for the same version is safe).
@@ -29,16 +29,16 @@ That single button:
 
    packaging each as `.tar.gz` (`.zip` on Windows), plus a
    `checksums.txt`.
-4. Builds the WebAssembly bundle via `cmd/nextalk-wasm/build.sh` (the
-   same script you'd run locally — see [`wasm.md`](wasm.md)), bundles it
-   with `web/index.html`, the docs, and a short "serve this over HTTP"
-   README, and uploads it as `nextalk-wasm_<version>.tar.gz`.
-5. Publishes one GitHub Release with all of the above attached and a
-   changelog generated from commit messages since the previous tag
-   (grouped into Features / Fixes / Documentation / Other — see
-   `changelog:` in `.goreleaser.yaml` for the exact rules; conventional
-   commit prefixes like `feat:`, `fix:`, `docs:` sort into their group,
-   everything else lands in "Other").
+4. Builds the complete WebAssembly asset set before GoReleaser starts:
+   `nextalk-wasm_<version>.tar.gz`, `nextalk_<version>.wasm`,
+   `wasm_exec_<version>.js`, and `nextalk-wasm_<version>.version.json`.
+5. Runs [GoReleaser](https://goreleaser.com) to cross-compile `nextalk`,
+   generate `checksums.txt`, and attach the CLI artifacts plus every WASM
+   asset to the same draft GitHub Release.
+6. Publishes that already-complete release. No asset upload happens after
+   publication, so GitHub release immutability cannot leave the release
+   half-complete. The changelog is generated from commit messages since the
+   previous tag (grouped into Features / Fixes / Documentation / Other).
 
 Writing commits as `feat: ...`, `fix: ...`, `docs: ...` when they matter
 for the changelog is enough — no changelog file to hand-maintain.
