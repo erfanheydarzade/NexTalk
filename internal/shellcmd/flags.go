@@ -8,9 +8,9 @@ import (
 // Parse splits argv into positional arguments and named command parameters.
 // Parameters use command syntax rather than executable-style flags:
 //
-//   xfer send file "photo.png" to <peer>
-//   xfer recv ticket <ticket> out "photo.png"
-//   xfer send file photo.png to <peer> json
+//	xfer send file "photo.png" to <peer>
+//	xfer recv ticket <ticket> out "photo.png"
+//	xfer send file photo.png to <peer> json
 //
 // A parameter with a value consumes the following word. Boolean parameters
 // are enabled by their bare name. Parameter names come from the command's
