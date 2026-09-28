@@ -200,6 +200,10 @@ func buildRegistry() *shellcmd.Registry {
 		{Name: "format", Usage: "Output format: human, json", Default: "human"},
 		{Name: "json", Usage: "Machine-readable JSON on stdout", IsBool: true},
 	}, func(ctx *shellcmd.Context) error {
+		format := ctx.Get("format")
+		if format != "" && format != "human" && format != "json" {
+			return fmt.Errorf("invalid format %q (want human or json)", format)
+		}
 		id, err := relayOrSession(ctx)
 		if err != nil {
 			return err
