@@ -38,7 +38,7 @@ func TestExecuteHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--to", "--file", "Usage:"} {
+	for _, want := range []string{"to", "file", "Usage:"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("xfer send help missing %q:\n%s", want, stderr)
 		}
@@ -65,9 +65,9 @@ func TestExecuteUnknownSuggests(t *testing.T) {
 func TestExecuteAlias(t *testing.T) {
 	reg := testRegistry(t)
 	s := shellcmd.NewSession()
-	// xsend is a default alias for "xfer send"; it must fail on missing
-	// --file (proving the alias expanded and dispatched), not on dispatch.
-	_, _, err := runLine(t, reg, s, "xsend --file f.bin --to p")
+	// xsend is a default alias for "xfer send"; it must fail downstream
+	// (proving the alias expanded and dispatched), not on dispatch.
+	_, _, err := runLine(t, reg, s, "xsend file f.bin to p")
 	if err == nil {
 		t.Fatal("expected a downstream error, proving alias dispatch worked")
 	}
@@ -82,7 +82,7 @@ func TestSessionCommands(t *testing.T) {
 	if _, _, err := runLine(t, reg, s, "alias ll xfer list"); err != nil {
 		t.Fatal(err)
 	}
-	stdout, _, err := runLine(t, reg, s, "ll --json")
+	stdout, _, err := runLine(t, reg, s, "ll json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +146,13 @@ func TestRunScriptExitCodes(t *testing.T) {
 func TestFlagErrorsClear(t *testing.T) {
 	reg := testRegistry(t)
 	s := shellcmd.NewSession()
-	_, _, err := runLine(t, reg, s, "transport attach --mailbox abc")
-	if err == nil || !strings.Contains(err.Error(), "--shard") {
+	_, _, err := runLine(t, reg, s, "transport attach mailbox abc")
+	if err == nil || !strings.Contains(err.Error(), "shard") {
 		t.Fatalf("missing required flag must name it: %v", err)
 	}
-	_, _, err = runLine(t, reg, s, "transport poll --bogus 1")
-	if err == nil || !strings.Contains(err.Error(), "unknown flag") {
-		t.Fatalf("unknown flag must name it: %v", err)
+	_, _, err = runLine(t, reg, s, "transport poll id bob format xml")
+	if err == nil || !strings.Contains(err.Error(), "invalid format") {
+		t.Fatalf("invalid format must name the problem: %v", err)
 	}
 }
 
@@ -181,9 +181,9 @@ func TestUnifiedCompleter(t *testing.T) {
 			t.Fatalf("xfer children missing %q: %q", want, got)
 		}
 	}
-	got = strings.Join(complete("xfer send --"), ",")
+	got = strings.Join(complete("xfer send "), ",")
 	if !strings.Contains(got, "to ") || !strings.Contains(got, "file ") {
-		t.Fatalf("flag completion: %q", got)
+		t.Fatalf("parameter completion: %q", got)
 	}
 	// Aliases complete at top level too (suffix after the fragment).
 	got = strings.Join(complete("xs"), ",")
