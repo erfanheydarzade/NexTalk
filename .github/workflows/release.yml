@@ -91,17 +91,6 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # --- CLI: linux/darwin/windows x amd64/arm64(/armv7) -> tar.gz/zip ---
-      - name: Run GoReleaser (CLI archives)
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
-
       # --- Browser/WASM bundle and loose assets ---
       # Build these files before GoReleaser so it can attach them to the
       # same draft release as the CLI archives.
@@ -146,8 +135,8 @@ jobs:
           printf '{\n  "version": "%s",\n  "api": "2",\n  "files": {\n    "wasm": "nextalk_%s.wasm",\n    "glue": "wasm_exec_%s.js"\n  }\n}\n' \
             "${RELEASE_TAG}" "${RELEASE_TAG}" "${RELEASE_TAG}" > "nextalk-wasm_${RELEASE_TAG}.version.json"
 
-      # --- CLI: linux/darwin/windows x amd64/arm64(/armv7) -> tar.gz/zip ---
-      - name: Run GoReleaser (CLI archives)
+      # --- CLI + WASM assets -> one complete draft GitHub Release ---
+      - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -156,17 +145,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ env.RELEASE_TAG }}
-
-      - name: Upload WASM bundle to the release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${RELEASE_TAG}" \
-            "nextalk-wasm_${RELEASE_TAG}.tar.gz" \
-            "nextalk_${RELEASE_TAG}.wasm" \
-            "wasm_exec_${RELEASE_TAG}.js" \
-            "nextalk-wasm_${RELEASE_TAG}.version.json" \
-            --repo "${{ github.repository }}" --clobber
 
       # No assets are uploaded after GoReleaser. This only publishes the
       # already-complete draft release, which is the point where GitHub
