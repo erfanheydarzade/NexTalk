@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func TestSplitLineQuotes(t *testing.T) {
+	cases := []struct { line, want string }{
+		{`xfer send --file "C:\\Users\\mahmo\\Desktop\\my file.png" --to peer`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\my file.png|--to|peer`},
+		{`xfer send --file 'C:\\Users\\mahmo\\Desktop\\my file.png' --to peer`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\my file.png|--to|peer`},
+		{`xfer send --file "C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png"`, `xfer|send|--file|C:\\Users\\mahmo\\Desktop\\repository-open-graph-template.png`},
+	}
+	for _, tc := range cases {
+		got, err := SplitLine(tc.line)
+		if err != nil { t.Fatalf("SplitLine(%q): %v", tc.line, err) }
+		if strings.Join(got, "|") != tc.want { t.Fatalf("SplitLine(%q) = %#v, want %q", tc.line, got, tc.want) }
+	}
+	if _, err := SplitLine(`xfer send --file "unterminated`); err == nil { t.Fatal("unterminated quote must fail") }
+}
 func TestParseBasic(t *testing.T) {
 	spec := []Flag{
 		{Name: "to", Required: true},
