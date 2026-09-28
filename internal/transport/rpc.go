@@ -61,13 +61,13 @@ const (
 	OpStatus       uint8 = 7
 	OpCapabilities uint8 = 8
 
-	OpRegister     uint8 = 9
-	OpResolve      uint8 = 10
-	OpXferCreate   uint8 = 11
-	OpXferPut      uint8 = 12
-	OpXferResume   uint8 = 13
-	OpXferGet      uint8 = 14
-	OpXferComplete uint8 = 15
+	OpRegister         uint8 = 9
+	OpResolve          uint8 = 10
+	OpXferCreate       uint8 = 11
+	OpXferPut          uint8 = 12
+	OpXferResume       uint8 = 13
+	OpXferGet          uint8 = 14
+	OpXferComplete     uint8 = 15
 	OpXferCancel       uint8 = 16
 	OpIdentityRegister uint8 = 17
 )
