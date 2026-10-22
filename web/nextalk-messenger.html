@@ -1,0 +1,1698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NexTalk</title>
+<meta name="referrer" content="no-referrer" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23111%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-size=%2716%27 font-family=%27sans-serif%27 font-weight=%27700%27 text-anchor=%27middle%27 fill=%27%23fff%27%3ENT%3C/text%3E%3C/svg%3E" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-yxsqcvoObrQYPE/cWkuspiTrjxeINCS+PJaHctWG0UM=' 'sha256-c6Ocbkmg/uRN4Ev4VzlLHkEew4gTi64Rh8vYehjdwyU=' 'sha256-bk14nPQ1m8V6Upmaadr2t8fqHjzLQ6w6sH5ObaFF2vI=' 'sha256-k3eVss6I0cjMkgdt2H4GV5xJtxYADiKoxQIOoKJtv9c=' 'sha256-C9wk7dQW/z6EqBORgsHrrIbsTt92aq0txW3XwbMucVI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'; object-src 'none'" />
+<meta name="theme-color" content="#e6e9ef" />
+<script>(function(){var K="nextalk_ui_v1",D={mode:"auto",accent:175,style:"soft",depth:1,radius:16,density:"comfy",fs:14,motion:true},S=Object.assign({},D);try{Object.assign(S,JSON.parse(localStorage.getItem(K)||"{}"))}catch(e){}
+var r=document.documentElement,mq=matchMedia("(prefers-color-scheme: dark)");
+function apply(){var t=S.mode==="auto"?(mq.matches?"dark":"light"):S.mode;r.dataset.theme=t;r.dataset.mode=S.mode;r.dataset.style=S.style;r.dataset.density=S.density;r.dataset.motion=S.motion?"on":"off";r.dataset.adv=S.adv?"on":"off";
+r.style.setProperty("--h",S.accent);r.style.setProperty("--d",S.depth);r.style.setProperty("--r",S.radius+"px");r.style.setProperty("--fs",S.fs+"px");
+var m=document.querySelector("meta[name=theme-color]");if(m)m.content=t==="dark"?"#1e232d":"#e6e9ef"}
+function save(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}apply()}
+mq.addEventListener("change",function(){if(S.mode==="auto")apply()});window.NTUI={S:S,D:D,apply:apply,save:save};apply()})();</script>
+
+<style>
+:root{--h:175;--d:1;--r:16px;--fs:14px;--pad:1;--sans:"Manrope",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;--ok:#2fb871;--warn:#d99a1f;--danger:#e0475a;--pink:#e5487f;--x:calc(var(--d)*5px);--b:calc(var(--d)*13px);
+--raise:var(--x) var(--x) var(--b) var(--sd),calc(var(--x)*-1) calc(var(--x)*-1) var(--b) var(--sl);
+--raise-s:calc(var(--x)*.5) calc(var(--x)*.5) calc(var(--b)*.55) var(--sd),calc(var(--x)*-.5) calc(var(--x)*-.5) calc(var(--b)*.55) var(--sl);
+--inset:inset var(--x) var(--x) var(--b) var(--sd),inset calc(var(--x)*-1) calc(var(--x)*-1) var(--b) var(--sl);
+--inset-s:inset calc(var(--x)*.5) calc(var(--x)*.5) calc(var(--b)*.55) var(--sd),inset calc(var(--x)*-.5) calc(var(--x)*-.5) calc(var(--b)*.55) var(--sl);--t:.18s cubic-bezier(.2,.8,.2,1)}
+:root,[data-theme=light]{color-scheme:light;--bg:#e6e9ef;--sl:#fff;--sd:#b6bfce;--text:#262e3d;--dim:#4f5a6c;--faint:#667184;--ac:hsl(var(--h) 72% 34%);--ac2:hsl(calc(var(--h) + 55) 70% 44%);--on-ac:#fff;--logbg:#dde1e9}
+[data-theme=dark]{color-scheme:dark;--bg:#1e232d;--sl:#2b3340;--sd:#12161d;--text:#e4e9f1;--dim:#a3aebf;--faint:#8793a5;--ac:hsl(var(--h) 80% 62%);--ac2:hsl(calc(var(--h) + 55) 80% 68%);--on-ac:#0b1116;--logbg:#181c24;--warn:#f0b84a}
+[data-style=flat]{--raise:0 0 0 1px var(--sd);--raise-s:0 0 0 1px var(--sd);--inset:inset 0 0 0 1px var(--sd);--inset-s:inset 0 0 0 1px var(--sd)}
+[data-style=crisp]{--raise:calc(var(--d)*4px) calc(var(--d)*4px) 0 var(--sd),0 0 0 1px var(--sd);--raise-s:calc(var(--d)*2px) calc(var(--d)*2px) 0 var(--sd),0 0 0 1px var(--sd);--inset:inset calc(var(--d)*3px) calc(var(--d)*3px) 0 var(--sd),inset 0 0 0 1px var(--sd);--inset-s:inset calc(var(--d)*2px) calc(var(--d)*2px) 0 var(--sd),inset 0 0 0 1px var(--sd)}
+[data-motion=off] *{transition:none!important;animation:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs)/1.45 var(--sans);display:flex;flex-direction:column;overflow:hidden;transition:background var(--t),color var(--t)}
+::selection{background:color-mix(in srgb,var(--ac) 30%,transparent)}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--sd);border-radius:9px;border:2px solid var(--bg)}::-webkit-scrollbar-track{background:transparent}
+:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+code{font-family:var(--mono);font-size:.9em;background:var(--bg);box-shadow:var(--inset-s);padding:1px 6px;border-radius:6px}
+/* top bar */
+.topbar{display:flex;align-items:center;gap:10px;margin:12px 14px;padding:calc(10px*var(--pad)) 16px;border-radius:var(--r);background:var(--bg);box-shadow:var(--raise);flex-wrap:wrap;position:relative;z-index:20}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.2px;line-height:1.15}
+.brand .glyph{width:32px;height:32px;border-radius:calc(var(--r)*.6);background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font:800 12px var(--mono);color:var(--on-ac);box-shadow:var(--raise-s)}
+.brand small{color:var(--faint);font-weight:500;font-size:11px}
+.status-pill{display:flex;align-items:center;gap:8px;font:500 11.5px var(--mono);color:var(--dim);padding:5px 12px;border-radius:999px;box-shadow:var(--inset-s)}
+.tools{margin-left:auto;display:flex;gap:8px;align-items:center}
+.nav-toggle{display:none}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}.dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}.dot.off{background:var(--danger);box-shadow:0 0 8px var(--danger)}
+/* layout */
+.shell{flex:1;display:flex;min-height:0;gap:14px;padding:0 14px 14px}
+.sidebar{width:288px;flex-shrink:0;display:flex;flex-direction:column;overflow-y:auto;background:var(--bg);border-radius:var(--r);box-shadow:var(--raise);transition:transform var(--t)}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;border-radius:var(--r);box-shadow:var(--raise);overflow:hidden}
+.section{padding:calc(16px*var(--pad)) 16px}
+.section h3{margin:0 0 12px;font-size:12.5px;color:var(--dim);font-weight:700;display:flex;align-items:center;gap:6px}
+.section h3 .tick{color:var(--ac)}
+label{display:block;font-size:12px;font-weight:600;color:var(--dim);margin:10px 0 6px}
+input[type=text],input[type=password],textarea,select{width:100%;background:var(--bg);box-shadow:var(--inset-s);border:0;color:var(--text);padding:calc(9px*var(--pad)) 12px;border-radius:calc(var(--r)*.65);font:12.5px var(--mono);outline:none;transition:box-shadow var(--t)}
+textarea{resize:vertical;min-height:64px}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+input:focus,textarea:focus,select:focus{box-shadow:var(--inset-s),0 0 0 2px color-mix(in srgb,var(--ac) 55%,transparent)}
+button{font:700 12.5px var(--sans);background:var(--bg);color:var(--text);border:0;padding:calc(8px*var(--pad)) 14px;border-radius:calc(var(--r)*.65);cursor:pointer;box-shadow:var(--raise-s);transition:box-shadow var(--t),color var(--t),transform var(--t)}
+button:hover{color:var(--ac)}button:active{box-shadow:var(--inset-s);transform:none}
+button.primary{background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--on-ac)}
+button.primary:hover{color:var(--on-ac);filter:brightness(1.08)}
+button.ghost{background:transparent;box-shadow:none}
+button.danger{color:var(--danger)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.small{padding:calc(5px*var(--pad)) 10px;font-size:11.5px}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.row.wide input{flex:1;width:auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.idbox{font:11px var(--mono);word-break:break-all;background:var(--bg);box-shadow:var(--inset-s);padding:10px;border-radius:calc(var(--r)*.65);color:var(--ac);margin-top:10px;display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.idbox .copy{flex-shrink:0}.muted{color:var(--faint);font-size:11.5px}
+.tabs,.seg{display:flex;gap:4px;padding:5px;border-radius:calc(var(--r)*.8);box-shadow:var(--inset-s);margin-top:4px}
+.tabs button,.seg button{flex:1;background:transparent;box-shadow:none;padding:calc(7px*var(--pad)) 8px;color:var(--dim)}
+.tabs button.active,.seg button.on{background:var(--bg);box-shadow:var(--raise-s);color:var(--ac)}
+.main>.tabs{margin:14px 16px 0;max-width:540px}
+/* peers */
+.peer-list{overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:8px;padding:4px}
+.peer{display:flex;align-items:center;gap:10px;padding:calc(9px*var(--pad)) 10px;cursor:pointer;border-radius:calc(var(--r)*.75);transition:box-shadow var(--t)}
+.peer:hover{box-shadow:var(--raise-s)}.peer.active{box-shadow:var(--inset-s)}.peer.active .peer-name{color:var(--ac)}
+.avatar{width:34px;height:34px;border-radius:calc(var(--r)*.6);flex-shrink:0;background:var(--bg);box-shadow:var(--raise-s);display:flex;align-items:center;justify-content:center;font:800 11px var(--mono);color:var(--ac)}
+.peer-meta{min-width:0;flex:1}.peer-name{font:600 12.5px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.peer-sub{font-size:11px;color:var(--faint)}
+.unread{background:var(--pink);color:#fff;font-size:10.5px;font-weight:800;border-radius:999px;padding:1px 7px;margin-left:auto}
+.chat-header{padding:12px 18px;display:flex;align-items:center;gap:12px;margin:14px 16px 0;border-radius:var(--r);box-shadow:var(--raise-s)}
+.chat-header .name{font:700 13px var(--mono)}.chat-header .sub{font-size:11.5px;color:var(--faint)}
+.view{flex:1;display:none;min-height:0;flex-direction:column}.view.active{display:flex}
+.messages{flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.bubble{max-width:64%;padding:10px 14px;border-radius:var(--r);font-size:13.5px;line-height:1.45;cursor:copy;box-shadow:var(--raise-s);background:var(--bg);overflow-wrap:anywhere}
+.bubble.me{align-self:flex-end;background:color-mix(in srgb,var(--ac) 15%,var(--bg));border-bottom-right-radius:4px}
+.bubble.them{align-self:flex-start;border-bottom-left-radius:4px}
+.bubble .meta{font:10.5px var(--mono);color:var(--faint);margin-top:4px}.bubble .sender{font:600 10.5px var(--mono);color:var(--ac);margin-bottom:2px}
+.system-note{align-self:center;font:11.5px var(--mono);color:var(--faint);padding:4px 12px;border-radius:999px;box-shadow:var(--inset-s)}
+.composer{display:flex;gap:10px;padding:14px 16px}.composer input{flex:1;padding:12px 16px;border-radius:999px}.composer button{border-radius:999px;padding-inline:20px}
+.empty-state{margin:auto;text-align:center;color:var(--faint);font-size:13px;max-width:380px;padding:28px;border-radius:var(--r);box-shadow:var(--inset-s)}.empty-state .glyph{font-size:30px;margin-bottom:10px}
+.panel-view{flex:1;overflow-y:auto;padding:22px}
+.panel-view h2{font-size:17px;margin:0 0 6px}.panel-view .desc{color:var(--dim);font-size:12.5px;margin-bottom:20px;max-width:660px;line-height:1.6}
+.card{background:var(--bg);box-shadow:var(--raise);border-radius:var(--r);padding:18px;margin-bottom:20px;max-width:740px}
+.card h4{margin:0 0 10px;font-size:13px;color:var(--ac);display:flex;align-items:center}
+.step-num{display:inline-flex;width:22px;height:22px;border-radius:50%;box-shadow:var(--inset-s);align-items:center;justify-content:center;font:700 11px var(--mono);color:var(--ac);margin-right:8px}
+.flag{font:600 10.5px var(--mono);padding:2px 8px;border-radius:999px;margin-left:8px;vertical-align:middle}.flag.warn{color:var(--warn);box-shadow:var(--inset-s)}
+.log-drawer{margin:0 14px 14px;border-radius:var(--r);background:var(--logbg);box-shadow:var(--inset-s);height:38px;overflow:hidden;transition:height .2s;flex-shrink:0}
+.log-drawer.open{height:230px}
+.log-head{display:flex;align-items:center;gap:8px;padding:9px 16px;cursor:pointer;font:600 11.5px var(--mono);color:var(--dim);user-select:none}
+.log-head .caret{transition:transform .2s;color:var(--faint)}.log-drawer.open .caret{transform:rotate(90deg)}
+#log{font:11.5px/1.5 var(--mono);color:var(--ac);white-space:pre-wrap;padding:0 16px 10px;height:186px;overflow-y:auto}
+#log .err{color:var(--danger)}#log .warn{color:var(--warn)}
+.kv{display:flex;justify-content:space-between;font:11.5px var(--mono);padding:6px 0;border-bottom:1px dashed var(--sd)}.kv span:last-child{color:var(--dim)}
+.inline-btn{background:none;box-shadow:none;color:var(--ac);font-size:11.5px;padding:0}
+/* new: drawer, palette, toasts */
+.scrim{position:fixed;inset:0;background:rgba(10,14,22,.4);opacity:0;pointer-events:none;transition:opacity var(--t);z-index:40}.scrim.show{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(340px,92vw);background:var(--bg);box-shadow:var(--raise);z-index:60;padding:18px 20px;overflow-y:auto;transform:translateX(105%);transition:transform .25s cubic-bezier(.2,.8,.2,1);border-radius:var(--r) 0 0 var(--r)}
+.drawer.open{transform:none}.drawer-head{display:flex;justify-content:space-between;align-items:center;font-size:16px}
+.swatches{display:flex;gap:10px;flex-wrap:wrap;padding:4px}.swatches button{width:32px;height:32px;padding:0;border-radius:50%}
+.swatches button.on{box-shadow:var(--inset-s),0 0 0 2px var(--text)}
+input[type=range]{width:100%;accent-color:var(--ac)}
+label.chk{display:flex;align-items:center;gap:10px;margin-top:16px}
+.palette{position:fixed;inset:0;z-index:80;background:rgba(10,14,22,.45);display:flex;justify-content:center;align-items:flex-start;padding-top:14vh}.palette[hidden]{display:none}
+.pal-box{width:min(560px,92vw);background:var(--bg);box-shadow:var(--raise);border-radius:var(--r);padding:14px}
+#palList{margin-top:10px;max-height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.pal-item{padding:9px 12px;border-radius:calc(var(--r)*.6);cursor:pointer;display:flex;justify-content:space-between;color:var(--dim)}.pal-item small{color:var(--faint);font-family:var(--mono)}
+.pal-item.sel{box-shadow:var(--inset-s);color:var(--ac)}
+#toasts{position:fixed;right:18px;bottom:64px;display:flex;flex-direction:column;gap:10px;z-index:90;max-width:min(380px,90vw)}
+.toast{background:var(--bg);box-shadow:var(--raise);border-radius:calc(var(--r)*.7);padding:10px 14px;font-size:12.5px;border-left:3px solid var(--ac);animation:tin .25s ease both;word-break:break-word}
+.toast.err{border-color:var(--danger)}.toast.warn{border-color:var(--warn)}@keyframes tin{from{opacity:0;transform:translateY(8px)}}
+kbd{font:600 10.5px var(--mono);padding:1px 6px;border-radius:5px;box-shadow:var(--inset-s);color:var(--faint)}
+[data-density=compact]{--pad:.72}
+@media(max-width:860px){.nav-toggle{display:inline-flex}.sidebar{position:fixed;left:14px;top:84px;bottom:68px;z-index:50;transform:translateX(-120%);width:min(320px,86vw)}body.nav-open .sidebar{transform:none}.status-pill span:last-child,.tools .lbl{display:none}.bubble{max-width:88%}.grid2{grid-template-columns:1fr}.brand small{display:none}}
+/* simple / advanced modes */
+html:not([data-adv=on]) .adv{display:none!important}
+html[data-adv=on] .simple-only{display:none!important}
+html[data-adv=on] .peer-prev{display:none}html:not([data-adv=on]) .peer-sub{display:none}
+.peer-prev{font-size:11.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#view-chat{position:relative}#chatPeerName{cursor:pointer}
+#onboard{position:absolute;inset:0;z-index:5;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px}
+html[data-ready=on] #onboard{display:none}
+.ob-card{max-width:400px;text-align:center;padding:34px 28px;border-radius:var(--r);box-shadow:var(--raise)}
+.ob-card .glyph{width:64px;height:64px;margin:0 auto 18px;border-radius:calc(var(--r)*1.2);background:linear-gradient(135deg,var(--ac),var(--ac2));color:var(--on-ac);font:800 22px var(--mono);display:flex;align-items:center;justify-content:center;box-shadow:var(--raise-s)}
+.ob-card h2{margin:0 0 8px;font-size:21px}.ob-card p{color:var(--dim);margin:0 0 20px;line-height:1.55}
+.ob-card button{padding:12px 28px;font-size:14px;border-radius:999px}
+#obMsg{min-height:20px;margin-top:16px;font-size:12.5px;color:var(--dim)}#obMsg.err{color:var(--danger)}
+#profileCard{display:flex;align-items:center;gap:12px}#profileCard .peer-meta b{font-size:13.5px}
+#simpleStatus span:last-child{display:inline!important}#modal{z-index:85}
+.chip-on{box-shadow:var(--inset-s)}
+textarea[readonly]{min-height:120px;font-size:12px}#mSub.mono{white-space:pre-wrap;font:11.5px var(--mono)}.chat-header .hb{display:flex;gap:6px;margin-left:auto}
+/* persistent "no password" warning banner */
+.vbanner{margin:12px 14px 0;padding:10px 16px;border-radius:var(--r);background:var(--bg);box-shadow:var(--raise-s);border-left:4px solid var(--danger);display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12.5px;font-weight:600;flex-shrink:0;position:relative;z-index:21}
+.vbanner[hidden]{display:none}
+.vbanner .ic{color:var(--danger);font-size:16px}
+.vbanner button{margin-left:auto}
+.chip{display:inline-block;font:600 10.5px var(--mono);padding:2px 8px;border-radius:999px;box-shadow:var(--inset-s);margin:0 4px 4px 0;color:var(--dim)}
+#extList .card{margin-bottom:14px}#extList pre{white-space:pre-wrap;word-break:break-all;font:11.5px var(--mono);margin:8px 0 0}
+</style>
+</head>
+<body>
+<noscript><p style="font:16px system-ui;padding:24px">NexTalk needs JavaScript and WebAssembly to run. Nothing is sent anywhere until you enable them.</p></noscript>
+
+<div class="vbanner" id="vaultBanner" role="alert" hidden>
+  <span class="ic">⚠</span><span id="vbText"></span>
+  <button class="small primary" id="vbBtn">Set password</button>
+</div>
+
+<div class="topbar">
+  <button class="nav-toggle" id="navToggle" aria-label="Toggle chats">☰</button>
+  <div class="brand"><div class="glyph">NT</div><div>NexTalk<br/><small>hybrid pqc messenger</small></div></div>
+  <div class="status-pill adv"><span class="dot off" id="dotWasm"></span><span id="statusWasm">wasm loading…</span></div>
+  <div class="status-pill adv"><span class="dot off" id="dotRelay"></span><span id="statusRelay">relay disconnected</span></div>
+  <div class="status-pill adv"><span class="dot off" id="dotListen"></span><span id="statusListen">not listening</span></div>
+  <div class="status-pill simple-only" id="simpleStatus"><span class="dot warn" id="ssDot"></span><span id="ssText">Starting…</span></div>
+  <div class="tools">
+    <button class="small adv" id="btnPalette" title="Command palette (Ctrl/Cmd+K)"><span class="lbl">Commands </span><kbd>⌘K</kbd></button>
+    <button class="small simple-only" id="btnCheck" title="Look for new messages">Check messages</button>
+    <button class="small" id="btnAdv" title="Show identity, transport, groups, offline lab and console">Advanced</button>
+    <button class="small" id="btnTheme" title="Cycle theme (Alt+T)"><span id="themeIcon">◐</span> <span class="lbl" id="themeLbl">Auto</span></button>
+    <button class="small primary" id="btnAppearance">◈ <span class="lbl">Appearance</span></button>
+  </div>
+</div>
+
+<div class="shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <div class="sidebar">
+
+    <div class="section simple-only" id="profileCard"><div class="avatar">Me</div><div class="peer-meta"><b>You</b><div class="muted" id="pcId">Not signed in yet</div></div><button class="small" id="pcCopy">Copy ID</button></div>
+
+    <div class="section adv">
+      <h3><span class="tick">›</span> Identity</h3>
+      <div class="row wide">
+        <button class="primary" id="btnInit" style="flex:1">init identity</button>
+        <button id="btnLoadId" title="Restore an identity backup file">import</button>
+        <button id="btnExportId" title="Download a backup (contains private keys)">export</button>
+      </div>
+      <div class="idbox" id="idBox" style="display:none;">
+        <span id="idText"></span>
+        <button class="copy small ghost" id="btnCopyId">copy</button>
+      </div>
+      <div class="muted" id="idHint">no identity yet — click init to generate one (Ed25519 + Dilithium3), or import a backup</div>
+    </div>
+
+    <div class="section adv">
+      <h3><span class="tick">›</span> Transport</h3>
+      <div class="tabs" id="transportTabs"></div>
+
+      <div id="transportWorker">
+        <label>Router / Worker URL</label>
+        <input type="text" id="workerUrl" placeholder="https://your-router.example.com" />
+        <div class="row wide">
+          <button class="primary" id="btnConnectWorker" style="flex:1">connect + register</button>
+          <button id="btnDisconnect" title="relay.disconnect()">disconnect</button>
+        </div>
+        <div class="row wide">
+          <button id="btnListen" style="flex:1">check for messages</button>
+        </div>
+      </div>
+
+      <div id="transportExt" style="display:none;"></div>
+
+      <div id="transportOffline" style="display:none;">
+        <div class="muted">No network — see the <b>Offline Lab</b> tab for manual envelope exchange (offer / accept / finish / encrypt / decrypt).</div>
+      </div>
+    
+      <label style="margin-top:12px">File relay <span class="muted">(attachments)</span></label>
+      <select id="fileRelay"></select>
+      <div id="fileRelayCfg"></div>
+    </div>
+
+    <div class="section" style="flex:1; display:flex; flex-direction:column; min-height:0; border-bottom:none;">
+      <h3><span class="tick">›</span> Chats <button class="inline-btn" id="btnAddPeer" style="float:right;">+ add peer</button></h3>
+      <input type="text" id="peerSearch" placeholder="Filter chats…" aria-label="Filter chats" style="margin-bottom:10px" />
+      <div class="peer-list" id="peerList"></div>
+    </div>
+
+  </div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <div class="tabs" style="margin:10px 16px 0; max-width:520px;">
+      <button data-view="chat" class="active">Chat</button>
+      <button class="adv" data-view="contexts">Group Contexts</button>
+      <button class="adv" data-view="extensions">Extensions</button>
+      <button data-view="offline">Offline Lab</button>
+      <button data-view="settings">Settings</button>
+    </div>
+
+    <!-- CHAT VIEW -->
+    <div class="view active" id="view-chat">
+      <div id="onboard" class="simple-only"><div class="ob-card"><div class="glyph">NT</div><h2>Welcome to NexTalk</h2><p>Private, end-to-end encrypted messages. No phone number or account needed.</p><div id="obUrlWrap"><input type="text" id="obUrl" placeholder="https://your-server.example.com" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Server address" style="text-align:center;margin:0 0 6px"><div class="muted" style="margin-bottom:18px">Server address from whoever runs your relay.</div></div><button class="primary" id="obStart">Get started</button><div id="obMsg" role="status"></div></div></div>
+      <div class="chat-header" id="chatHeader" style="display:none;">
+        <div class="avatar" id="chatAvatar">?</div>
+        <div>
+          <div class="name" id="chatPeerName">—</div>
+          <div class="sub" id="chatPeerSub">no active session</div>
+        </div>
+        <div class="hb"><button class="small" id="btnVerify" title="Compare safety words to rule out a man-in-the-middle">🛡 Verify</button><button class="small" id="btnReconnect" title="Start a fresh session if messages stop decrypting">↻ Reconnect</button></div>
+      </div>
+      <div class="messages" id="messages">
+        <div class="empty-state">
+          <div class="glyph">🔐</div>
+          Pick a chat on the left or start a new one.<br/>Your messages are end-to-end encrypted.
+        </div>
+      </div>
+      <div class="composer" id="composer" style="display:none;">
+        <input type="text" id="chatText" placeholder="Write a message" />
+        <button id="btnAttach" title="Send a file" aria-label="Send a file">📎</button><input type="file" id="attachFile" hidden>
+        <button class="primary" id="btnSend">send</button>
+      </div>
+    </div>
+
+    <!-- CONTEXTS (GROUP) VIEW -->
+    <div class="view" id="view-contexts">
+      <div class="panel-view">
+        <h2>Multi-peer contexts (groups)</h2>
+        <div class="desc">Wraps <code>NexTalk.context.*</code> — the same group/broadcast layer as the CLI: create a context, manage membership (add / exclude / include / mute / block / remove), and send a multi-recipient message.</div>
+
+        <div class="card">
+          <h4><span class="step-num">1</span>Create / list</h4>
+          <div class="row wide">
+            <input type="text" id="ctxName" placeholder="context name" />
+            <button class="primary" id="btnCreateCtx">create</button>
+            <button id="btnListCtx">list all</button>
+          </div>
+          <div id="ctxListOut" class="muted" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">2</span>Active context</h4>
+          <label>Context ID</label>
+          <input type="text" id="ctxId" placeholder="context id" />
+          <div class="row">
+            <button id="btnShowCtx" class="small">show</button>
+            <button id="btnListMembers" class="small">list members</button>
+            <button id="btnGetEffective" class="small">effective recipients</button>
+            <button id="btnDropCtx" class="small danger">drop</button>
+          </div>
+          <div id="ctxShowOut" class="muted" style="margin-top:8px; white-space:pre-wrap; font-family:var(--mono); font-size:11px;"></div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">3</span>Membership</h4>
+          <label>Peer ID</label>
+          <input type="text" id="ctxPeer" placeholder="peer id" />
+          <div class="row">
+            <button id="btnAddMember" class="small primary">add</button>
+            <button id="btnExclude" class="small">exclude</button>
+            <button id="btnInclude" class="small">include</button>
+            <button id="btnMuteMember" class="small">mute</button>
+            <button id="btnBlockMember" class="small">block</button>
+            <button id="btnRemoveMember" class="small danger">remove</button>
+          </div>
+          <label style="margin-top:10px;">Rename context</label>
+          <div class="row wide">
+            <input type="text" id="ctxRename" placeholder="new name" />
+            <button id="btnRenameCtx">rename</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">4</span>Send to context</h4>
+          <div class="row wide">
+            <input type="text" id="ctxMsg" placeholder="message to all effective recipients" />
+            <button class="primary" id="btnSendMulti">send</button>
+          </div>
+          <div id="ctxSendOut" class="muted" style="margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OFFLINE LAB VIEW -->
+    <div class="view" id="view-offline">
+      <div class="panel-view">
+        <h2>Offline manual lab <span class="flag warn">envelope copy/paste</span></h2>
+        <div class="desc">No relay, no network: copy the text between two identities yourself. Offer, answer and encrypted message are base64 strings produced by <code>createOffer</code> → <code>acceptOffer</code> → <code>finishHandshake</code>, then <code>encrypt</code> / <code>decrypt</code>.</div>
+
+        <div class="card">
+          <h4><span class="step-num">1</span>Create offer <span class="muted">(initiator)</span></h4>
+          <label>Remote peer ID</label>
+          <input type="text" id="offRemote" placeholder="remote peer id" />
+          <div class="row"><button class="primary small" id="btnOfflineOffer">createOffer</button></div>
+          <label style="margin-top:8px;">Offer envelope (send this to the other peer)</label>
+          <textarea id="offOfferOut" readonly placeholder="offer (base64) — send this to the other person"></textarea><div class="row"><button class="small" data-copy="offOfferOut">Copy offer</button></div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">2</span>Accept offer <span class="muted">(responder)</span></h4>
+          <label>Paste offer envelope received</label>
+          <textarea id="offAcceptIn" placeholder="paste the offer here"></textarea>
+          <div class="row"><button class="primary small" id="btnOfflineAccept">accept</button></div>
+          <label style="margin-top:8px;">Answer envelope (send back to initiator)</label>
+          <textarea id="offAnswerOut" readonly placeholder="answer (base64) — send this back"></textarea><div class="row"><button class="small" data-copy="offAnswerOut">Copy answer</button></div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">3</span>Finish handshake <span class="muted">(initiator)</span></h4>
+          <label>Paste answer envelope received</label>
+          <textarea id="offFinishIn" placeholder="paste the answer here"></textarea>
+          <div class="row"><button class="primary small" id="btnOfflineFinish">finish</button></div>
+          <div id="offFinishOut" class="muted" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card">
+          <h4><span class="step-num">4</span>Encrypt / decrypt a message</h4>
+          <div class="grid2">
+            <div>
+              <label>To peer</label>
+              <input type="text" id="offEncPeer" placeholder="peer id" />
+              <label>Plaintext</label>
+              <input type="text" id="offEncMsg" placeholder="hello world" />
+              <div class="row"><button class="primary small" id="btnOfflineEncrypt">encrypt</button></div>
+              <textarea id="offEncOut" readonly placeholder="encrypted message (base64)"></textarea><div class="row"><button class="small" data-copy="offEncOut">Copy message</button></div>
+            </div>
+            <div>
+              <label>Paste message envelope to decrypt</label>
+              <textarea id="offDecIn" placeholder="paste the encrypted message here"></textarea>
+              <div class="row"><button class="primary small" id="btnOfflineDecrypt">decrypt</button></div>
+              <div id="offDecOut" class="muted" style="margin-top:8px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXTENSIONS VIEW -->
+    <div class="view" id="view-extensions">
+      <div class="panel-view">
+        <h2>Extensions</h2>
+        <div class="desc">Extensions are sandboxed transports (<code>.ntx</code>) that carry your already-encrypted messages and files. They never see your keys or plaintext. Installed extensions start disabled.</div>
+        <div class="card" id="extBanner" hidden><h4>Not available in this build</h4><div class="muted">This wasm build has no <code>NexTalk.transport</code> yet. Rebuild it with the extension bridge (see the wasm change prompt), then press “rescan bridge” in Settings.</div></div>
+        <div class="card"><h4>Install</h4><input type="file" id="extFile" accept=".ntx"><div class="muted" style="margin-top:6px">You’ll see the permissions and hash before anything is installed.</div></div>
+        <div id="extList"></div>
+        <div class="card"><h4>Receive a file</h4>
+          <div class="muted">Uses the file relay chosen in the sidebar. Tickets that arrive in chat have their own Download button.</div>
+          <label>Download ticket</label><textarea id="rTicket" placeholder="Paste the ticket you were sent"></textarea>
+          <div class="row"><button class="small" id="rGet">Download</button><span class="muted" id="rOut"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div class="view" id="view-settings">
+      <div class="panel-view">
+        <h2>Settings</h2>
+        <div class="card"><h4>Mode</h4><label class="chk" style="margin-top:0"><input type="checkbox" id="cAdv"> Advanced mode</label><div class="muted" style="margin-top:6px">Adds identity, transport, group contexts, the offline lab and the console log. Leave it off for a simple, chat-first view.</div></div>
+        <div class="desc adv">Local, per-browser configuration — the browser equivalent of the CLI's <code>.env</code> (<code>WORKER_URL</code>). Stored only in this browser's localStorage, never sent anywhere by this page itself.</div>
+
+        <div class="card adv">
+          <h4>Transport endpoints</h4>
+          <label>WORKER_URL</label>
+          <input type="text" id="setWorkerUrl" placeholder="https://your-router.example.com" />
+          <div class="row"><button class="primary small" id="btnSaveSettings">save</button><span class="muted" id="settingsSaved"></span></div>
+        </div>
+
+        <div class="card adv">
+          <h4>Wasm bridge status</h4>
+          <div class="kv"><span>NexTalk global</span><span id="dbgGlobal">—</span></div>
+          <div class="kv"><span>NexTalk.relay</span><span id="dbgRelay">—</span></div>
+          <div class="kv"><span>NexTalk.context</span><span id="dbgContext">—</span></div>
+          <div class="kv"><span>identity + handshake + encrypt/decrypt</span><span id="dbgCore">—</span></div>
+          <div class="kv"><span>NexTalk.offline + relay.listen</span><span id="dbgOffline">—</span></div>
+          <div class="kv"><span>NexTalk.version()</span><span id="dbgVersion">—</span></div>
+          <div class="kv"><span>NexTalk.transport + xfer (extensions)</span><span id="dbgExt">—</span></div>
+          <div class="kv"><span>context.sendMulti async-safe</span><span id="dbgSendMulti">—</span></div>
+          <div class="row"><button class="small" id="btnRescan">rescan bridge</button></div>
+        </div>
+
+        <div class="card"><h4>Messages</h4><label class="chk" style="margin-top:0"><input type="checkbox" id="cAuto" checked> Check for new messages automatically</label><div class="muted" style="margin-top:6px">Every few seconds while this tab is visible, slower in the background, with back-off on errors.</div></div>
+        <div class="card"><h4>Remember this device</h4><div class="muted" id="vaultState" style="margin-bottom:10px"></div><div class="row"><button class="small primary" id="vEnable">Enable…</button><button class="small" id="vForget">Forget</button><button class="small" id="vExportC">Export contacts</button></div></div>
+        <div class="card"><h4>Identity backup</h4><div class="muted" style="margin-bottom:10px">A backup is a snapshot: chats that moved on since it was taken can no longer decrypt after a restore (Reconnect fixes that). “Remember this device” keeps the live state instead. The file contains your private keys — keep it safe.</div><div class="row"><button class="small" id="sbExport">Download backup</button><button class="small" id="sbImport">Restore from file</button></div></div>
+
+        <div class="card">
+          <h4>Danger zone</h4>
+          <div class="row"><button class="danger small" id="btnClearAll">Clear chats &amp; settings</button></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="log-drawer adv" id="logDrawer">
+  <div class="log-head" id="logHead"><span class="caret">▶</span> console log <span class="muted" id="logCount" style="margin-left:auto;"></span></div>
+  <div id="log"></div>
+</div>
+
+<div id="scrim" class="scrim"></div>
+<aside id="appearance" class="drawer" aria-label="Appearance" aria-hidden="true">
+ <div class="drawer-head"><b>Appearance</b><button class="small" id="apClose" aria-label="Close appearance">✕</button></div>
+ <label>Theme</label><div class="seg" data-key="mode"><button data-v="auto">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div>
+ <div class="muted" style="margin-top:6px">Auto follows your device and switches live.</div>
+ <label>Accent</label><div class="swatches" id="swatches"></div>
+ <label>Surface style</label><div class="seg" data-key="style"><button data-v="soft">Soft</button><button data-v="flat">Flat</button><button data-v="crisp">Crisp</button></div>
+ <label>Depth</label><input type="range" id="rDepth" min="0.4" max="1.8" step="0.1">
+ <label>Corner radius</label><input type="range" id="rRadius" min="4" max="28" step="1">
+ <label>Text size</label><input type="range" id="rFs" min="12" max="17" step="1">
+ <label>Density</label><div class="seg" data-key="density"><button data-v="comfy">Comfortable</button><button data-v="compact">Compact</button></div>
+ <label class="chk"><input type="checkbox" id="cMotion"> Animations</label>
+ <div class="row"><button class="small" id="apReset">Reset to default</button></div>
+</aside>
+<div id="palette" class="palette" hidden><div class="pal-box"><input id="palIn" type="text" placeholder="Type a command…" autocomplete="off" aria-label="Command"><div id="palList" role="listbox"></div></div></div>
+<div id="modal" class="palette" hidden><div class="pal-box"><h4 id="mTitle" style="margin:0 0 4px;font-size:15px"></h4><div class="muted" id="mSub" style="margin-bottom:10px"></div><input id="mIn" type="text" autocomplete="off" aria-label="Value"><div class="row" style="justify-content:flex-end"><button class="small" id="mCancel">Cancel</button><button class="small primary" id="mOk">OK</button></div></div></div>
+<div id="toasts" aria-live="polite"></div>
+
+<script src="wasm/wasm_exec.js"></script>
+<script src="wasm/ntx-host.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+   * State
+   * ============================================================ */
+  const state = {
+    myId: null,
+    transport: "worker",
+    connected: false,
+    listening: false,
+    peers: {},          // peerId -> { name, messages: [{from,text,ts,system}], unread }
+    activePeer: null,
+    listenTimer: null,
+    auto: true,
+  };
+
+  const LS_SETTINGS = "nextalk_settings_v1";
+  const LS_PEERS = "nextalk_peers_v1";
+  const LS_ID = "nextalk_myid_v1";
+
+  /* ============================================================
+   * Log drawer
+   * ============================================================ */
+  const logEl = document.getElementById("log");
+  const logCountEl = document.getElementById("logCount");
+  let logLines = 0;
+  function log(level, ...args){
+    const line = document.createElement("div");
+    if (level === "err") line.className = "err";
+    if (level === "warn") line.className = "warn";
+    const msg = args.map(a => typeof a === "string" ? a : safeStringify(a)).join(" ");
+    line.textContent = msg;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    logLines++;
+    logCountEl.textContent = logLines;
+  }
+  function safeStringify(o){
+    try { return JSON.stringify(o); } catch(e){ return String(o); }
+  }
+  document.getElementById("logHead").onclick = () => {
+    document.getElementById("logDrawer").classList.toggle("open");
+  };
+
+  function safe(fn){
+    return (...args) => {
+      try { return fn(...args); }
+      catch(e){ log("err", "[uncaught]", e && e.message ? e.message : String(e)); console.error(e); }
+    };
+  }
+
+  /* Defensive call into the wasm bridge — never throws, always returns an object. */
+  function call(pathLabel, fn, ...args){
+    if (typeof NexTalk === "undefined") return { error: "NexTalk module not loaded yet" };
+    if (typeof fn !== "function") return { error: `${pathLabel} is not available in this wasm build` };
+    try{
+      const res = fn(...args);
+      if (res === undefined || res === null) return { error: `${pathLabel} returned no result` };
+      return res;
+    }catch(e){
+      const m = e && e.message ? e.message : String(e);
+      console.error(`[NexTalk ${pathLabel}]`, e);
+      return { error: m };
+    }
+  }
+  async function callAsync(pathLabel, fn, ...args){
+    if (typeof NexTalk === "undefined") return { error: "NexTalk module not loaded yet" };
+    if (typeof fn !== "function") return { error: `${pathLabel} is not available in this wasm build` };
+    try{
+      const res = await fn(...args);
+      if (res === undefined || res === null) return { error: `${pathLabel} returned no result` };
+      return res;
+    }catch(e){
+      const m = e && e.message ? e.message : String(e);
+      console.error(`[NexTalk ${pathLabel}]`, e);
+      return { error: m };
+    }
+  }
+
+  /* ============================================================
+   * Helpers derived from the Go bridge (internal/wasmbridge, api "2")
+   * ============================================================ */
+  const PERSIST = () => window.ntPersist && window.ntPersist();
+  const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const seenMsg = new Set();
+  // base58 → bytes (null on bad alphabet). Peer IDs decode to exactly 64 bytes:
+  // Ed25519 pub (32) ‖ SHA3-256(Dilithium pub) (32) — see relay.PeerIDToEd25519Pub.
+  function b58dec(str){
+    let n = 0n; for (const c of str){ const i = B58.indexOf(c); if (i < 0) return null; n = n * 58n + BigInt(i); }
+    let h = n.toString(16); if (h.length % 2) h = "0" + h;
+    const out = n === 0n ? [] : h.match(/../g).map(x => parseInt(x, 16));
+    let z = 0; while (z < str.length && str[z] === "1") z++;
+    return Uint8Array.from([...new Array(z).fill(0), ...out]);
+  }
+  function toB64(u){ let s = ""; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); }
+  function checkPeerId(id){
+    const r = b58dec(id || "");
+    if (!r) return "That ID contains characters a NexTalk ID can't have.";
+    if (r.length !== 64) return "That isn't a full NexTalk ID (expected 64 bytes, got " + r.length + ").";
+    if (id === state.myId) return "That's your own ID.";
+    return null;
+  }
+  // safety words = proquint of the first 32 bytes (Ed25519 key) of a Peer ID, computed here —
+  // never trusted from the engine, so "their" words are really derived from THEIR ID.
+  function fpOf(id){
+    const raw = b58dec(id || ""); if (!raw || raw.length < 32) return "";
+    const r = call("encoding.toProquint", NexTalk.encoding && NexTalk.encoding.toProquint, toB64(raw.slice(0, 32)));
+    return r.proquint || "";
+  }
+  function myFp(){ return fpOf(state.myId); }
+  // sessions.list() is the source of truth for "established" vs "pending" — never a local flag.
+  function syncSessions(){
+    const r = call("sessions.list", NexTalk.sessions && NexTalk.sessions.list);
+    if (r.error || !r.sessions) return;
+    const est = new Set(), pend = new Set();
+    r.sessions.forEach(x => { if (x.peerId) (x.status === "established" ? est : pend).add(x.peerId); });
+    est.forEach(id => { if (!state.peers[id]) state.peers[id] = { name: id, messages: [], unread: 0 }; });
+    pend.forEach(id => { if (!state.peers[id]) state.peers[id] = { name: id, messages: [], unread: 0 }; });
+    Object.keys(state.peers).forEach(id => {
+      if (id.startsWith("group:")) return;
+      state.peers[id].established = est.has(id);
+      state.peers[id].pending = !est.has(id) && pend.has(id);
+    });
+    savePeers(); renderPeerList(); renderChatHeader();
+  }
+  // context.sendMulti is registered WITHOUT async() in v0.3.1 and does network I/O inside a js.FuncOf
+  // callback → "fatal error: all goroutines are asleep" kills the whole Go runtime. An async-safe build
+  // returns a Promise; a legacy build returns a plain {error} for an unknown context (no side effects).
+  let sendMultiSafe = null;
+  function probeSendMulti(){
+    if (sendMultiSafe !== null) return sendMultiSafe;
+    const f = NexTalk.context && NexTalk.context.sendMulti;
+    if (typeof f !== "function") return (sendMultiSafe = false);
+    try{ const r = f("__probe__", ""); if (r && typeof r.then === "function"){ r.catch(() => {}); return (sendMultiSafe = true); } }catch(e){}
+    return (sendMultiSafe = false);
+  }
+  function groupSendOk(){
+    if (!state.connected){ log("warn", "[group] connect to the relay first"); return false; }
+    if (!probeSendMulti()){
+      log("err", "[group] sending disabled: this wasm build's context.sendMulti is synchronous");
+      log("info", "[group] With a relay attached it deadlocks and kills the Go runtime. Fix in internal/wasmbridge/register.go: contextNs.Set(\"sendMulti\", js.FuncOf(async(guard(jsContextSendMulti)))) — then rebuild.");
+      return false;
+    }
+    return true;
+  }
+  // adaptive auto-poll: fast while visible, slow when hidden, linear back-off (max 30s) on errors
+  let pollT = null, pollFail = 0;
+  function schedulePoll(){
+    clearTimeout(pollT);
+    if (!state.connected || !state.auto) return;
+    const delay = document.hidden ? 60000 : Math.min(4000 + pollFail * 4000, 30000);
+    pollT = setTimeout(async () => { try{ await pollListen(true); } finally { schedulePoll(); } }, delay);
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state.connected && state.auto){ clearTimeout(pollT); pollListen(true).then(schedulePoll); } });
+  document.getElementById("btnDisconnect").onclick = safe(() => {
+    call("relay.disconnect", NexTalk.relay && NexTalk.relay.disconnect);
+    state.connected = false; clearTimeout(pollT);
+    setDot(dots.relay, "off", "relay disconnected"); setDot(dots.listen, "off", "not listening");
+    log("info", "[relay] disconnected");
+  });
+  // fresh handshake: drop the (possibly desynced) session, then offer again
+  async function reconnectPeer(peer){
+    call("sessions.drop", NexTalk.sessions && NexTalk.sessions.drop, peer);
+    const o = await callAsync("createOffer", NexTalk.createOffer, peer);
+    if (o.error) return log("err", "[createOffer]", o.error);
+    const x = await callAsync("relay.sendOffer", NexTalk.relay.sendOffer, peer, o.offer);
+    if (x.error) return log("err", "[relay.sendOffer]", x.error);
+    pushMessage(peer, { system: true, text: "new session requested — waiting for answer" });
+    syncSessions(); PERSIST();
+  }
+
+  /* ============================================================
+   * Status pills
+   * ============================================================ */
+  function setDot(id, cls, text){
+    const d = document.getElementById(id.dot); const t = document.getElementById(id.text);
+    d.className = "dot " + cls;
+    t.textContent = text;
+  }
+  const dots = {
+    wasm:   { dot: "dotWasm",   text: "statusWasm" },
+    relay:  { dot: "dotRelay",  text: "statusRelay" },
+    listen: { dot: "dotListen", text: "statusListen" },
+  };
+
+  /* ============================================================
+   * Persistence (settings / peers / id — no key material, that
+   * stays wherever the wasm module itself persists it)
+   * ============================================================ */
+  function loadSettings(){
+    try{ return JSON.parse(localStorage.getItem(LS_SETTINGS) || "{}"); }catch(e){ return {}; }
+  }
+  function saveSettings(s){ localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); }
+  function loadPeers(){
+    try{ localStorage.removeItem(LS_PEERS); }catch(e){}   // purge plaintext history written by older builds
+    return {};
+  }
+  function savePeers(){ PERSIST(); }   // chats live only in memory and in the encrypted vault
+
+  /* ============================================================
+   * Peer list UI
+   * ============================================================ */
+  function ensurePeer(id, opts){
+    if (!state.peers[id]) state.peers[id] = { name: (opts && opts.name) || id, messages: [], unread: 0, established: !!(opts && opts.established) };
+    if (opts && opts.established) state.peers[id].established = true;
+    savePeers();
+    renderPeerList();
+    return state.peers[id];
+  }
+  function renderPeerList(){
+    const list = document.getElementById("peerList");
+    list.innerHTML = "";
+    const ids = Object.keys(state.peers);
+    if (ids.length === 0){
+      const empty = document.createElement("div");
+      empty.className = "muted"; empty.style.padding = "10px 14px";
+      empty.textContent = "No chats yet — tap “New chat”";
+      list.appendChild(empty);
+      return;
+    }
+    ids.forEach(id => {
+      const p = state.peers[id];
+      const el = document.createElement("div");
+      el.className = "peer" + (id === state.activePeer ? " active" : "");
+      el.innerHTML = `
+        <div class="avatar">${escapeHtml((p.name||id).slice(0,2).toUpperCase())}</div>
+        <div class="peer-meta">
+          <div class="peer-name">${escapeHtml(p.name || id)}</div>
+          <div class="peer-sub">${id.startsWith("group:") ? "group" : p.established ? "session active" : p.pending ? "waiting for answer" : "no session"} · ${escapeHtml(id.slice(0,10))}…</div>
+        </div>
+        ${p.unread ? `<div class="unread">${escapeHtml(String(p.unread))}</div>` : ""}
+      `;
+      el.onclick = () => selectPeer(id);
+      list.appendChild(el);
+    });
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  function selectPeer(id){
+    state.activePeer = id;
+    state.peers[id].unread = 0;
+    savePeers();
+    renderPeerList();
+    renderChatHeader();
+    renderMessages();
+  }
+
+  function renderChatHeader(){
+    const header = document.getElementById("chatHeader");
+    const composer = document.getElementById("composer");
+    if (!state.activePeer){ header.style.display = "none"; composer.style.display = "none"; return; }
+    header.style.display = "flex"; composer.style.display = "flex";
+    const p = state.peers[state.activePeer];
+    document.getElementById("chatAvatar").textContent = (p.name||state.activePeer).slice(0,2).toUpperCase();
+    document.getElementById("chatPeerName").textContent = p.name || state.activePeer;
+    document.getElementById("chatPeerSub").textContent = p.established ? "session established · double ratchet active" : "no established session yet";
+  }
+
+  function pushMessage(peerId, msg){
+    const p = ensurePeer(peerId);
+    p.messages.push(msg);
+    if (p.messages.length > 500) p.messages.splice(0, p.messages.length - 500);
+    if (peerId !== state.activePeer) p.unread = (p.unread||0) + 1;
+    savePeers();
+    renderPeerList();
+    if (peerId === state.activePeer) renderMessages();
+  }
+
+  function renderMessages(){
+    const wrap = document.getElementById("messages");
+    wrap.innerHTML = "";
+    if (!state.activePeer){
+      wrap.innerHTML = `<div class="empty-state"><div class="glyph">🔐</div>Pick a chat on the left or start a new one.</div>`;
+      return;
+    }
+    const p = state.peers[state.activePeer];
+    if (!p.messages.length){
+      wrap.innerHTML = `<div class="empty-state"><div class="glyph">✉️</div>No messages yet — say hello 👋</div>`;
+      return;
+    }
+    p.messages.forEach(m => {
+      if (m.system){
+        const el = document.createElement("div");
+        el.className = "system-note"; el.textContent = m.text;
+        wrap.appendChild(el); return;
+      }
+      const el = document.createElement("div");
+      el.className = "bubble " + (m.me ? "me" : "them");
+      el.innerHTML = (m.me ? "" : `<div class="sender">${escapeHtml(window.ntName ? ntName(m.from) : m.from)}</div>`) +
+        `${escapeHtml(m.text)}<div class="meta">${new Date(m.ts).toLocaleTimeString()}</div>`;
+      if (window.NTT) NTT.decorate(el, m);
+      wrap.appendChild(el);
+    });
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  /* ============================================================
+   * View / tab switching
+   * ============================================================ */
+  document.querySelectorAll(".main > .tabs button[data-view]").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll(".main > .tabs button[data-view]").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      document.getElementById("view-" + btn.dataset.view).classList.add("active");
+    };
+  });
+
+  // transport tabs are built by the transport layer (NTT, last script)
+
+  /* ============================================================
+   * Identity
+   * ============================================================ */
+  document.getElementById("btnInit").onclick = safe(() => {
+    // NexTalk.init() swaps the keys but keeps the previous identity's contexts/Fanout inside the module,
+    // so a second identity is created in a clean wasm instance (page reload) instead.
+    if (state.myId){
+      if (!confirm("You already have an identity in this tab (" + state.myId.slice(0,12) + "…).\n\nCreating a new one discards every chat, group and saved copy of the current one, and reloads the page to start from a clean engine.\n\nContinue?")) return;
+      sessionStorage.setItem("nt_autoinit", "1");
+      [LS_PEERS, LS_ID, "nextalk_vault_v1"].forEach(k => localStorage.removeItem(k));
+      return location.reload();
+    }
+    safe(doInit)();
+  });
+  function doInit(){
+    const result = call("init", NexTalk.init);
+    if (result.error) return log("err", "[init]", result.error);
+    if (!result.id) return log("err", "[init] no identity id returned");
+
+    // Switching identity invalidates whatever peers/sessions were tracked
+    // for the previous one — clear local UI state so nothing looks "active"
+    // when the module no longer has the matching session keys.
+    state.peers = {}; state.activePeer = null;
+    savePeers(); renderPeerList(); renderChatHeader(); renderMessages();
+    state.connected = false; state.listening = false;
+    if (state.listenTimer) { clearTimeout(state.listenTimer); state.listenTimer = null; }
+    setDot(dots.relay, "off", "relay disconnected");
+    setDot(dots.listen, "off", "not listening");
+    document.getElementById("btnListen").textContent = "check for messages";
+
+    state.myId = result.id;
+    localStorage.setItem(LS_ID, result.id);
+    showId(result.id);
+    log("info", "[init] identity:", result.id);
+    PERSIST();
+  }
+  const idFile = document.createElement("input");
+  idFile.type = "file"; idFile.accept = ".json,application/json"; idFile.style.display = "none"; document.body.appendChild(idFile);
+  async function importIdentityText(txt){
+    const r = await callAsync("importIdentity", typeof NexTalk !== "undefined" && NexTalk.importIdentity, txt);
+    if (r.error) return log("err", "[importIdentity]", r.error);
+    const prev = localStorage.getItem(LS_ID);
+    if (prev && prev !== r.id){ state.peers = {}; state.activePeer = null; savePeers(); }
+    state.myId = r.id; localStorage.setItem(LS_ID, r.id);
+    state.connected = false; state.listening = false;
+    setDot(dots.relay, "off", "relay disconnected"); setDot(dots.listen, "off", "not checked yet");
+    showId(r.id); renderPeerList(); renderChatHeader(); renderMessages();
+    log("info", "[importIdentity] restored", r.id);
+    window.ntToast && ntToast("Identity restored — connect to go online");
+    syncSessions(); PERSIST();
+  }
+  idFile.onchange = safe(async () => { const f = idFile.files[0]; idFile.value = ""; if (f) await importIdentityText(await f.text()); });
+  document.getElementById("btnLoadId").onclick = safe(() => {
+    if (typeof NexTalk === "undefined" || typeof NexTalk.importIdentity !== "function") return log("err", "[import] NexTalk.importIdentity is not available in this wasm build");
+    if (state.myId && !confirm("Restoring a backup replaces the identity active in this tab. Continue?")) return;
+    idFile.click();
+  });
+  document.getElementById("btnExportId").onclick = safe(() => {
+    if (!state.myId) return log("warn", "[export] create or restore an identity first");
+    const r = call("exportIdentity", typeof NexTalk !== "undefined" && NexTalk.exportIdentity);
+    if (typeof r !== "string") return log("err", "[exportIdentity]", (r && r.error) || "no data returned");
+    if (!confirm("This backup contains your PRIVATE KEYS and session state. Anyone with the file can read your messages and impersonate you.\n\nDownload it and keep it somewhere safe?")) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([r], { type: "application/json" }));
+    a.download = "nextalk-identity-" + state.myId.slice(0, 8) + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    log("info", "[exportIdentity] backup downloaded");
+  });
+  document.getElementById("btnCopyId").onclick = safe(() => {
+    if (!state.myId) return;
+    navigator.clipboard && navigator.clipboard.writeText(state.myId);
+    log("info", "[id] copied to clipboard");
+  });
+  function showId(id){
+    document.getElementById("idBox").style.display = "flex";
+    document.getElementById("idText").textContent = id;
+    document.getElementById("idHint").style.display = "none";
+  }
+
+  /* ============================================================
+   * Worker transport
+   * ============================================================ */
+  document.getElementById("btnConnectWorker").onclick = safe(async () => {
+    const url = document.getElementById("workerUrl").value.trim();
+    if (!url) return log("warn", "[relay] enter a router URL first");
+    try{
+      const u = new URL(url), local = ["localhost", "127.0.0.1"].includes(u.hostname);
+      if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return log("err", "[relay] refusing " + u.protocol + " — use https (plain http is only allowed for localhost)");
+    }catch(e){ return log("err", "[relay] not a valid URL"); }
+    if (!state.myId) return log("warn", "[relay] click init to create an identity first — nothing is loaded in the module yet");
+    if (typeof NexTalk === "undefined" || !NexTalk.relay) return log("err", "[relay] NexTalk.relay is not available");
+
+    const btn = document.getElementById("btnConnectWorker");
+    if (btn.disabled) return; // guard against double-click firing register() twice
+    btn.disabled = true;
+    const prevText = btn.textContent;
+    btn.textContent = "connecting…";
+    try{
+      const res = call("relay.connectWorker", NexTalk.relay.connectWorker, url);
+      if (res.error) return log("err", "[relay.connectWorker]", res.error);
+
+      const reg = await callAsync("relay.register", NexTalk.relay.register);
+      if (reg.error) return log("err", "[relay.register]", reg.error);
+
+      state.connected = true;
+      setDot(dots.relay, "on", "worker connected");
+      log("info", "[relay] connected + registered:", reg);
+      syncSessions(); pollListen(true); schedulePoll();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevText;
+    }
+  });
+
+  /* ============================================================
+   * (proxy transport removed — extensions supply it)
+   * ============================================================ */
+  // proxy was a dead placeholder; S3/proxy-style relays now come in as extensions
+
+  /* ============================================================
+   * Listen loop (worker/proxy) — same event shapes as your demo
+   * ============================================================ */
+  document.getElementById("btnListen").onclick = safe(() => {
+    if (typeof NexTalk === "undefined" || !NexTalk.relay || typeof NexTalk.relay.listen !== "function") return log("err", "[listen] NexTalk.relay.listen is not available");
+    if (!state.connected) return log("warn", "[listen] connect to the server first");
+    pollListen();   // exactly one request per click — no timer, no loop
+  });
+
+  async function pollListen(quiet){
+    if (state.polling) return;
+    state.polling = true;
+    const btn = document.getElementById("btnListen");
+    btn.disabled = true;
+    if (!quiet) setDot(dots.listen, "warn", "checking…");
+    try{
+      const result = await callAsync("relay.listen", NexTalk.relay.listen);
+      if (result.error){
+        pollFail++; setDot(dots.listen, "off", "check failed");
+        log("err", "[relay.listen]", result.error);
+      } else {
+        pollFail = 0;
+        const evs = result.events || [];
+        setDot(dots.listen, "on", evs.length ? evs.length + " new" : "nothing new");
+        evs.forEach(handleListenEvent);
+        if (evs.length){ syncSessions(); PERSIST(); } else if (!quiet) log("info", "[listen] nothing new");
+      }
+    }catch(e){
+      setDot(dots.listen, "off", "check failed");
+      log("err", "[listen failed]", e && e.message ? e.message : String(e));
+    }finally{
+      state.polling = false; btn.disabled = false;
+    }
+  }
+
+  const bodyOf = e => e.encoding === "base64" ? "[binary message · " + Math.ceil(String(e.message).length * 3 / 4) + " bytes]" : e.message;
+  function handleListenEvent(e){
+    // Dump the raw event so we can see every field the bridge actually sent —
+    // this is how we'll spot whether "offer" events carry a different id
+    // format (raw pubkey hex) than "message" events (canonical base58 Peer ID).
+    log("info", "[listen event raw]", e);
+
+    switch (e.type){
+      case "offer":
+        // v0.3.1: "peer" is always the canonical base58 Peer ID; "pubkey" (hex) is only the relay mailbox key.
+        // The responder session is already established once the answer is sent.
+        ensurePeer(e.peer, { established: true });
+        pushMessage(e.peer, { system: true, text: "incoming offer accepted, answer sent" });
+        log("info", "[offer] accepted from", e.peer, "(relay key " + String(e.pubkey || "").slice(0, 12) + "…)");
+        break;
+      case "answer":
+        ensurePeer(e.peer, { established: true });
+        pushMessage(e.peer, { system: true, text: "session established" });
+        log("info", "[answer] session established with", e.peer);
+        break;
+      case "message":
+        ensurePeer(e.sender, { established: true });
+        pushMessage(e.sender, { from: e.sender, text: bodyOf(e), ts: Date.now() });
+        log("info", "[chat]", e.sender, ":", bodyOf(e));
+        break;
+      case "group_message": {
+        const cid = e.context_id, gid = "group:" + cid;
+        if (e.message_id){ if (seenMsg.has(e.message_id)) break; seenMsg.add(e.message_id); }
+        ensurePeer(gid, { name: e.context || cid });
+        if (e.context) state.peers[gid].name = e.context;   // creator-signed name, may have been renamed
+        pushMessage(gid, { from: e.sender, text: bodyOf(e), ts: Date.now() });
+        log("info", "[group]", e.context || cid, "-", e.sender, ":", bodyOf(e));
+        // member policies are local to each device: learn the sender so a reply reaches them
+        const ms = call("context.listMembers", ctxFn("listMembers"), cid);
+        if (Array.isArray(ms) && !ms.some(m => m.peer_id === e.sender)) call("context.addMember", ctxFn("addMember"), cid, e.sender);
+        const ctxIdField = document.getElementById("ctxId");
+        if (ctxIdField && !ctxIdField.value.trim() && cid) ctxIdField.value = cid;
+        break;
+      }
+      case "error":
+        log("err", "[listen event error]", e.message);
+        if (/AEAD|replay|rolled back|no active session|no pending session/i.test(e.message || ""))
+          log("warn", "[session] a message couldn't be decrypted — open that chat and press Reconnect");
+        break;
+      default:
+        log("info", "[listen event]", e);
+    }
+  }
+
+  // Canonical NexTalk Peer IDs are base58(Ed25519Pub ‖ SHA3-256(DilithiumPub)) —
+  // long (~85-90 chars), mixed-case, base58 alphabet (no 0/O/I/l).
+  // A bare 64-char lowercase hex string is a raw 32-byte key (e.g. the Ed25519
+  // pubkey alone), which is a different, shorter identifier — not what
+  // encrypt()/sendMessage() expect as the session key.
+  function looksLikeRawPubkeyHex(id){
+    return typeof id === "string" && /^[0-9a-f]{64}$/i.test(id);
+  }
+
+  /* ============================================================
+   * Add peer / create offer (worker+proxy path)
+   * ============================================================ */
+  document.getElementById("btnAddPeer").onclick = safe(async () => {
+    if (!state.myId) return log("warn", "[peer] click init to create an identity first");
+    let peer = prompt("Peer ID to add / offer to:");
+    if (!peer) return;
+    peer = peer.trim();
+    const rc = call("contacts.resolve", NexTalk.contacts && NexTalk.contacts.resolve, peer);   // contact name → ID
+    if (rc && rc.userId) peer = rc.userId;
+    const bad = checkPeerId(peer);
+    if (bad) return log("warn", "[peer] " + bad);
+    ensurePeer(peer);
+    selectPeer(peer);
+
+    if (state.transport === "offline"){
+      log("info", "[peer] added — use the Offline Lab tab to exchange envelopes manually");
+      return;
+    }
+    if (window.NTT && NTT.isExt()){
+      const o = await callAsync("createOffer", NexTalk.createOffer, peer);
+      if (o.error || !o.offer) return log("err", "[createOffer]", o.error || "no offer returned");
+      const r = await NTT.sendOffer(peer, o.offer);
+      if (r.error) return log("warn", "[offer] " + r.error + " — exchange the offer in the Offline Lab, then chat here");
+      pushMessage(peer, { system: true, text: "offer sent via extension — waiting for answer" });
+      syncSessions(); PERSIST(); return;
+    }
+    if (!state.connected) return log("warn", "[offer] connect a relay first (Transport panel)");
+
+    const result = await callAsync("createOffer", NexTalk.createOffer, peer);
+    if (result.error) return log("err", "[createOffer]", result.error);
+    if (!result.offer) return log("err", "[createOffer] no offer returned");
+
+    if (!NexTalk.relay || typeof NexTalk.relay.sendOffer !== "function") return log("err", "[relay.sendOffer] function is not available");
+    const sent = await callAsync("relay.sendOffer", NexTalk.relay.sendOffer, peer, result.offer);
+    if (sent.error) return log("err", "[relay.sendOffer]", sent.error);
+    pushMessage(peer, { system: true, text: "offer sent — waiting for answer" });
+    log("info", "[offer] sent to", peer);
+    syncSessions(); PERSIST();
+  });
+
+  /* ============================================================
+   * Send message (worker+proxy path)
+   * ============================================================ */
+  async function sendActive(){
+    const input = document.getElementById("chatText");
+    const text = input.value;
+    const peer = state.activePeer;
+    if (!peer || !text.trim()) return;
+
+    if (peer.startsWith("group:")){
+      if (window.NTT && NTT.isExt()){
+        const g = await NTT.sendGroup(peer.slice(6), text);
+        if (g.error) return log("err", "[group via extension]", g.error);
+        pushMessage(peer, { me: true, text, ts: Date.now() });
+        input.value = ""; PERSIST();
+        if (g.pending || g.failed) window.ntToast && ntToast("Sent to " + g.sent + " · " + g.pending + " waiting (no session) · " + g.failed + " failed", "warn");
+        return log("info", "[group via extension] 1:1 fan-out sent:", g.sent, "pending:", g.pending, "failed:", g.failed);
+      }
+      if (!groupSendOk()) return;
+      const g = await callAsync("context.sendMulti", NexTalk.context && NexTalk.context.sendMulti, peer.slice(6), text);
+      if (g.error) return log("err", "[context.sendMulti]", /no enabled recipients/.test(g.error) ? "no members yet — add them under Group Contexts → Membership" : g.error);
+      pushMessage(peer, { me: true, text, ts: Date.now() });
+      input.value = ""; PERSIST();
+      if (g.pending || g.failed) window.ntToast && ntToast("Sent to " + g.sent + " · " + g.pending + " waiting (no session) · " + g.failed + " failed", "warn");
+      return log("info", "[context.sendMulti] sent:", g.sent, "pending:", g.pending, "failed:", g.failed);
+    }
+    if (window.NTT && NTT.isExt()){
+      const x = await NTT.send(peer, text);
+      if (x.error) return log("err", "[transport.send]", x.error);
+      pushMessage(peer, { me: true, text, ts: Date.now() });
+      input.value = ""; PERSIST(); return;
+    }
+    const result = await callAsync("encrypt", NexTalk.encrypt, peer, text);
+    if (result.error) return log("err", "[encrypt]", result.error);
+    if (!result.ciphertext) return log("err", "[encrypt] no ciphertext returned");
+
+    if (!NexTalk.relay || typeof NexTalk.relay.sendMessage !== "function") return log("err", "[relay.sendMessage] function is not available");
+    const sent = await callAsync("relay.sendMessage", NexTalk.relay.sendMessage, peer, result.ciphertext);
+    if (sent.error) return log("err", "[relay.sendMessage]", sent.error);
+
+    pushMessage(peer, { me: true, text, ts: Date.now() });
+    input.value = ""; PERSIST();
+  }
+  document.getElementById("btnSend").onclick = safe(sendActive);
+  document.getElementById("chatText").addEventListener("keydown", e => { if (e.key === "Enter") sendActive(); });
+
+  /* ============================================================
+   * Group contexts
+   * ============================================================ */
+  function ctxFn(name){ return NexTalk.context ? NexTalk.context[name] : undefined; }
+  function ctxCall(name, ...args){ return call("context." + name, ctxFn(name), ...args); }
+
+  document.getElementById("btnCreateCtx").onclick = safe(() => {
+    const name = document.getElementById("ctxName").value.trim();
+    if (!name) return log("warn", "[context.createContext] enter a name");
+    if (!state.connected) return log("warn", "[context] connect to the relay first — a group binds to the relay active when the first one is created");
+    const r = ctxCall("createContext", name);
+    if (r.error) return log("err", "[context.createContext]", r.error);
+    if (r.context_id){ ensurePeer("group:" + r.context_id, { name: r.display_name }); PERSIST(); }
+    log("info", "[context.createContext] created:", r);
+    document.getElementById("ctxName").value = "";
+    if (r.context_id) document.getElementById("ctxId").value = r.context_id;
+  });
+  document.getElementById("btnListCtx").onclick = safe(() => {
+    const r = ctxCall("list");
+    if (r.error) return log("err", "[context.list]", r.error);
+    document.getElementById("ctxListOut").textContent = safeStringify(r);
+    log("info", "[context.list]", r);
+  });
+  document.getElementById("btnShowCtx").onclick = safe(() => {
+    const id = document.getElementById("ctxId").value.trim();
+    if (!id) return log("warn", "[context.show] need context id");
+    const r = ctxCall("show", id);
+    if (r.error) return log("err", "[context.show]", r.error);
+    document.getElementById("ctxShowOut").textContent = safeStringify(r);
+  });
+  document.getElementById("btnListMembers").onclick = safe(() => {
+    const id = document.getElementById("ctxId").value.trim();
+    if (!id) return log("warn", "[context.listMembers] need context id");
+    const r = ctxCall("listMembers", id);
+    if (r.error) return log("err", "[context.listMembers]", r.error);
+    document.getElementById("ctxShowOut").textContent = safeStringify(r);
+  });
+  document.getElementById("btnGetEffective").onclick = safe(() => {
+    const id = document.getElementById("ctxId").value.trim();
+    if (!id) return log("warn", "[context.getEffectiveRecipients] need context id");
+    const r = ctxCall("getEffectiveRecipients", id);
+    if (r.error) return log("err", "[context.getEffectiveRecipients]", r.error);
+    document.getElementById("ctxShowOut").textContent = safeStringify(r);
+  });
+  document.getElementById("btnDropCtx").onclick = safe(() => {
+    const id = document.getElementById("ctxId").value.trim();
+    if (!id) return log("warn", "[context.drop] need context id");
+    if (!confirm("Drop context " + id + "?")) return;
+    const r = ctxCall("drop", id);
+    if (r.error) return log("err", "[context.drop]", r.error);
+    log("info", "[context.drop] dropped", id);
+  });
+  document.getElementById("btnRenameCtx").onclick = safe(() => {
+    const id = document.getElementById("ctxId").value.trim();
+    const name = document.getElementById("ctxRename").value.trim();
+    if (!id || !name) return log("warn", "[context.rename] need context id + new name");
+    const r = ctxCall("rename", id, name);
+    if (r.error) return log("err", "[context.rename]", r.error);
+    log("info", "[context.rename] renamed:", r);
+    const gp = state.peers["group:" + id]; if (gp){ gp.name = name; savePeers(); renderPeerList(); }
+  });
+  function memberOp(btnId, fnName, label){
+    document.getElementById(btnId).onclick = safe(() => {
+      const id = document.getElementById("ctxId").value.trim();
+      const peer = document.getElementById("ctxPeer").value.trim();
+      if (!id || !peer) return log("warn", `[context.${fnName}] need context id + peer id`);
+      const r = ctxCall(fnName, id, peer);
+      if (r.error) return log("err", `[context.${fnName}]`, r.error);
+      log("info", `[context.${fnName}]`, label, peer, "in", id);
+    });
+  }
+  memberOp("btnAddMember", "addMember", "added");
+  memberOp("btnExclude", "excludeMember", "excluded");
+  memberOp("btnInclude", "includeMember", "included");
+  memberOp("btnMuteMember", "muteMember", "muted");
+  memberOp("btnBlockMember", "blockMember", "blocked");
+  memberOp("btnRemoveMember", "removeMember", "removed");
+
+  document.getElementById("btnSendMulti").onclick = safe(async () => {
+    const id = document.getElementById("ctxId").value.trim();
+    const msg = document.getElementById("ctxMsg").value;
+    if (!id || !msg.trim()) return log("warn", "[context.sendMulti] need context id + message");
+    if (!groupSendOk()) return;
+    const r = await callAsync("context.sendMulti", ctxFn("sendMulti"), id, msg);
+    if (r.error) return log("err", "[context.sendMulti]", r.error);
+    document.getElementById("ctxSendOut").textContent =
+      `message_id: ${r.message_id} · sent: ${r.sent} · pending: ${r.pending} · failed: ${r.failed}`;
+    log("info", "[context.sendMulti]", r);
+    document.getElementById("ctxMsg").value = "";
+  });
+
+  /* ============================================================
+   * Offline lab — mirrors `nextalk offline {offer,accept,finish,encrypt,decrypt}`.
+   * accept/finish/decrypt names are best-effort guesses; swap in the
+   * real ones if the log shows "not available".
+   * ============================================================ */
+  /* Offline lab — wired to wasmbridge handshake.go / message.go:
+   *   createOffer(peerId)      -> { offer: base64 }
+   *   acceptOffer(offerB64)    -> { senderId, answer: base64 }
+   *   finishHandshake(ansB64)  -> { peerId }
+   *   encrypt(peerId, text)    -> { ciphertext: base64 }
+   *   decrypt(cipherB64)       -> { senderId, plaintext }          */
+  const $id = i => document.getElementById(i);
+  const asText = v => typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  const setOut = (id, t) => { const e = $id(id); if ("value" in e) e.value = t; else e.textContent = t; };
+  function needId(lbl){
+    if (!state.myId) $id("btnInit").click();
+    if (!state.myId){ log("err", "[" + lbl + "] could not create an identity"); return false; }
+    return true;
+  }
+  async function offStep(lbl, outId, getFn, args, pick, after){
+    setOut(outId, "working…");
+    const r = await callAsync(lbl, getFn(), ...args);
+    if (r.error){ setOut(outId, "⚠ " + r.error); return log("err", "[" + lbl + "]", r.error); }
+    setOut(outId, asText(pick(r)));
+    if (after) after(r);
+    syncSessions(); PERSIST();
+    log("info", "[" + lbl + "] done");
+  }
+  $id("btnOfflineOffer").onclick = safe(async () => {
+    if (!needId("offline offer")) return;
+    const remote = $id("offRemote").value.trim();
+    if (!remote) return log("warn", "[offline offer] enter the other person's ID");
+    await offStep("createOffer", "offOfferOut", () => NexTalk.createOffer, [remote], r => r.offer);
+  });
+  $id("btnOfflineAccept").onclick = safe(async () => {
+    if (!needId("offline accept")) return;
+    const raw = $id("offAcceptIn").value.trim();
+    if (!raw) return log("warn", "[offline accept] paste the offer first");
+    await offStep("acceptOffer", "offAnswerOut", () => NexTalk.acceptOffer, [raw], r => r.answer,
+      r => { if (r.senderId) ensurePeer(r.senderId, { established: true }); });
+  });
+  $id("btnOfflineFinish").onclick = safe(async () => {
+    const raw = $id("offFinishIn").value.trim();
+    if (!raw) return log("warn", "[offline finish] paste the answer first");
+    await offStep("finishHandshake", "offFinishOut", () => NexTalk.finishHandshake, [raw], r => "Session established with " + r.peerId,
+      r => { if (r.peerId) ensurePeer(r.peerId, { established: true }); });
+  });
+  $id("btnOfflineEncrypt").onclick = safe(async () => {
+    if (!needId("offline encrypt")) return;
+    const peer = $id("offEncPeer").value.trim(), msg = $id("offEncMsg").value;
+    if (!peer || !msg.trim()) return log("warn", "[offline encrypt] need a peer ID and a message");
+    await offStep("encrypt", "offEncOut", () => NexTalk.encrypt, [peer, msg], r => r.ciphertext);
+  });
+  $id("btnOfflineDecrypt").onclick = safe(async () => {
+    const raw = $id("offDecIn").value.trim();
+    if (!raw) return log("warn", "[offline decrypt] paste the encrypted message first");
+    await offStep("decrypt", "offDecOut", () => NexTalk.decrypt, [raw], r => r.senderId + ": " + r.plaintext,
+      r => { if (r.senderId) pushMessage(r.senderId, { from: r.senderId, text: r.plaintext, ts: Date.now() }); });
+  });
+  document.querySelectorAll("[data-copy]").forEach(b => b.onclick = safe(() => {
+    const el = $id(b.dataset.copy); if (!el.value) return;
+    el.select();
+    (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).catch(() => document.execCommand("copy"))
+      .then(() => window.ntToast && ntToast("Copied"));
+  }));
+  document.querySelectorAll("textarea[readonly]").forEach(t => t.addEventListener("focus", () => t.select()));
+
+  /* ============================================================
+   * Settings view
+   * ============================================================ */
+  function initSettings(){
+    const s = loadSettings();
+    document.getElementById("setWorkerUrl").value = s.workerUrl || "";
+    if (s.workerUrl) document.getElementById("workerUrl").value = s.workerUrl;
+  }
+  document.getElementById("btnSaveSettings").onclick = safe(() => {
+    const s = Object.assign(loadSettings(), {
+      workerUrl: document.getElementById("setWorkerUrl").value.trim(),
+    });
+    saveSettings(s);
+    document.getElementById("workerUrl").value = s.workerUrl;
+    document.getElementById("settingsSaved").textContent = "saved ✓";
+    setTimeout(() => document.getElementById("settingsSaved").textContent = "", 1500);
+    log("info", "[settings] saved", s);
+  });
+  document.getElementById("btnClearAll").onclick = safe(() => {
+    if (!confirm("Clear locally-saved settings and peer list? (does not touch your identity/session key material inside the wasm module)")) return;
+    localStorage.removeItem(LS_SETTINGS);
+    localStorage.removeItem(LS_PEERS);
+    localStorage.removeItem("nextalk_nicks_v1");
+    window.ntVaultForget && ntVaultForget();
+    state.peers = {}; state.activePeer = null;
+    renderPeerList(); renderMessages(); renderChatHeader();
+    initSettings();
+    log("warn", "[settings] cleared local storage");
+  });
+  document.getElementById("btnRescan").onclick = safe(scanBridge);
+
+  function scanBridge(){
+    const g = typeof NexTalk !== "undefined";
+    document.getElementById("dbgGlobal").textContent = g ? "present" : "missing";
+    document.getElementById("dbgRelay").textContent = g && NexTalk.relay ? "present" : "missing";
+    document.getElementById("dbgContext").textContent = g && NexTalk.context ? "present" : "missing";
+    const core = g && ["init","exportIdentity","importIdentity","createOffer","acceptOffer","finishHandshake","encrypt","decrypt"].every(k => typeof NexTalk[k] === "function");
+    document.getElementById("dbgCore").textContent = core ? "present" : "partial/missing";
+    document.getElementById("dbgOffline").textContent = g && NexTalk.offline && NexTalk.relay && typeof NexTalk.relay.listen === "function" ? "present" : "missing";
+    let ver = "—"; try{ if (g && typeof NexTalk.version === "function") ver = safeStringify(NexTalk.version()); }catch(e){}
+    document.getElementById("dbgVersion").textContent = ver;
+    if (g && NexTalk.context) document.getElementById("dbgSendMulti").textContent = probeSendMulti() ? "yes (async)" : "NO — group sends blocked";
+    try{ const v = g && NexTalk.version && NexTalk.version(); if (v && v.api && v.api !== "2") log("warn", "[bridge] page written for wasm bridge api 2, this build reports api " + v.api); }catch(e){}
+  }
+
+  window.ntApp = { handle: handleListenEvent, push: pushMessage, persist: PERSIST, state, syncSessions, myFp, fpOf, reconnectPeer, schedulePoll, setPeers: o => { state.peers = (o && typeof o === "object") ? o : {}; renderPeerList(); renderChatHeader(); }, init: safe(doInit), restore: importIdentityText };
+
+  /* ============================================================
+   * Boot
+   * ============================================================ */
+  initSettings();
+  state.auto = loadSettings().auto !== false;
+  document.getElementById("cAuto").checked = state.auto;
+  renderPeerList();
+  Object.assign(state.peers, loadPeers());
+  renderPeerList();
+
+  window.addEventListener("error", e => log("err", "[window error]", e && e.message ? e.message : String(e)));
+  window.addEventListener("unhandledrejection", e => {
+    const reason = e && e.reason ? e.reason : e;
+    log("err", "[unhandled rejection]", reason && reason.message ? reason.message : String(reason));
+  });
+
+  setDot(dots.wasm, "warn", "wasm loading…");
+  log("info", "[wasm] loading…");
+
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("wasm/nextalk.wasm"), go.importObject)
+    .then(result => {
+      go.run(result.instance);
+      log("info", "[wasm] loaded");
+      setTimeout(() => {
+        if (typeof NexTalk === "undefined"){
+          setDot(dots.wasm, "off", "NexTalk global missing");
+          log("err", "[wasm] loaded, but NexTalk global was not exposed");
+          return;
+        }
+        setDot(dots.wasm, "on", "wasm ready");
+        log("info", "[wasm] NexTalk API detected");
+        scanBridge();
+        try{ NexTalkTransportHost.register(NexTalk); log("info", "[ext] WebAssembly extension host ready"); }
+        catch(e){ log("err", "[ext] extension host unavailable: " + e.message); }
+        window.ntBoot && ntBoot();
+
+        // IMPORTANT: never auto-restore a cached id as "active" — a fresh wasm
+        // instance has no identity loaded in memory yet (that's what caused
+        // the "no identity loaded" / slice-bounds crash). Only show it as a
+        // muted, inactive hint; the user must click init() this session.
+        const savedId = localStorage.getItem(LS_ID);
+        if (savedId){
+          document.getElementById("idHint").textContent =
+            `last identity used in this browser: ${savedId.slice(0,16)}… — import its backup file to restore it, or click init for a new one`;
+        }
+        const s = loadSettings();
+        if (s.workerUrl) document.getElementById("workerUrl").value = s.workerUrl;
+      }, 0);
+    })
+    .catch(err => {
+      setDot(dots.wasm, "off", "wasm load failed");
+      log("err", "[wasm load failed]", err && err.message ? err.message : String(err));
+    });
+
+})();
+</script>
+<script>
+(function(){
+const {S,D,save}=window.NTUI,$=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const HUES=[["Cyan",175],["Violet",255],["Pink",340],["Amber",38],["Green",145],["Blue",215]];
+/* toasts */
+function toast(t,c){const el=document.createElement("div");el.className="toast "+(c||"");el.textContent=t;$("#toasts").appendChild(el);setTimeout(()=>el.remove(),c==="err"?6000:3000);while($("#toasts").children.length>4)$("#toasts").firstChild.remove()}
+/* appearance panel */
+const dr=$("#appearance"),sc=$("#scrim");
+function openDr(o){dr.classList.toggle("open",o);dr.setAttribute("aria-hidden",!o);sc.classList.toggle("show",o||document.body.classList.contains("nav-open"))}
+function sync(){
+ $$("#appearance .seg").forEach(g=>[...g.children].forEach(b=>b.classList.toggle("on",b.dataset.v===String(S[g.dataset.key]))));
+ $$("#swatches button").forEach(b=>b.classList.toggle("on",+b.dataset.h===+S.accent));
+ $("#rDepth").value=S.depth;$("#rRadius").value=S.radius;$("#rFs").value=S.fs;$("#cMotion").checked=S.motion;
+ const ic={auto:"◐",light:"☀",dark:"☾"};$("#themeIcon").textContent=ic[S.mode];$("#themeLbl").textContent=S.mode[0].toUpperCase()+S.mode.slice(1)}
+HUES.forEach(([n,h])=>{const b=document.createElement("button");b.dataset.h=h;b.title=n;b.setAttribute("aria-label",n+" accent");b.style.background=`hsl(${h} 70% 52%)`;b.onclick=()=>{S.accent=h;save();sync()};$("#swatches").appendChild(b)});
+$$("#appearance .seg button").forEach(b=>b.onclick=()=>{S[b.parentNode.dataset.key]=b.dataset.v;save();sync()});
+[["#rDepth","depth",parseFloat],["#rRadius","radius",Number],["#rFs","fs",Number]].forEach(([id,k,f])=>$(id).oninput=e=>{S[k]=f(e.target.value);save()});
+$("#cMotion").onchange=e=>{S.motion=e.target.checked;save()};
+$("#apReset").onclick=()=>{Object.assign(S,D);save();sync();toast("Appearance reset")};
+$("#apClose").onclick=()=>openDr(false);$("#btnAppearance").onclick=()=>openDr(true);
+const cycle=()=>{S.mode={auto:"light",light:"dark",dark:"auto"}[S.mode];save();sync();toast("Theme: "+S.mode)};
+$("#btnTheme").onclick=cycle;
+/* mobile sidebar */
+const nav=o=>{document.body.classList.toggle("nav-open",o);sc.classList.toggle("show",o)};
+$("#navToggle").onclick=()=>nav(!document.body.classList.contains("nav-open"));
+sc.onclick=()=>{nav(false);openDr(false)};
+$("#peerList").addEventListener("click",()=>nav(false));
+/* command palette */
+const pal=$("#palette"),pin=$("#palIn"),pl=$("#palList");let items=[],sel=0;
+const go=v=>()=>$(`.main > .tabs [data-view=${v}]`).click(),clk=id=>()=>$(id).click();
+const CMDS=[["Go to chat",go("chat")],["Go to group contexts",go("contexts")],["Go to offline lab",go("offline")],["Go to settings",go("settings")],
+["Initialize identity",clk("#btnInit")],["Add peer",clk("#btnAddPeer")],["Connect worker",clk("#btnConnectWorker")],["Check for messages",clk("#btnListen")],
+["Theme: auto (system)",()=>{S.mode="auto";save();sync()}],["Theme: light",()=>{S.mode="light";save();sync()}],["Theme: dark",()=>{S.mode="dark";save();sync()}],
+["Next accent colour",()=>{const i=HUES.findIndex(h=>h[1]===+S.accent);S.accent=HUES[(i+1)%HUES.length][1];save();sync()}],
+["Surface: soft",()=>{S.style="soft";save();sync()}],["Surface: flat",()=>{S.style="flat";save();sync()}],["Surface: crisp",()=>{S.style="crisp";save();sync()}],
+["Open appearance",()=>openDr(true)],["Toggle console log",clk("#logHead")],["Focus chat filter",()=>$("#peerSearch").focus()],["Toggle advanced mode",()=>$("#btnAdv").click()]];
+function render(){const q=pin.value.toLowerCase();items=CMDS.filter(c=>c[0].toLowerCase().includes(q)&&(S.adv||!/offline|group|worker|identity|listening|console/i.test(c[0])));sel=Math.min(sel,Math.max(items.length-1,0));
+ pl.innerHTML="";items.forEach((c,i)=>{const d=document.createElement("div");d.className="pal-item"+(i===sel?" sel":"");d.setAttribute("role","option");d.textContent=c[0];d.onclick=()=>run(i);pl.appendChild(d)});
+ if(!items.length)pl.innerHTML='<div class="muted" style="padding:10px">No matching command</div>'}
+function run(i){const c=items[i];if(!c)return;openPal(false);c[1]()}
+function openPal(o){pal.hidden=!o;if(o){pin.value="";sel=0;render();pin.focus()}}
+pin.oninput=()=>{sel=0;render()};
+pin.onkeydown=e=>{if(e.key==="ArrowDown"){sel=(sel+1)%items.length;render();e.preventDefault()}else if(e.key==="ArrowUp"){sel=(sel-1+items.length)%items.length;render();e.preventDefault()}else if(e.key==="Enter")run(sel)};
+pal.onclick=e=>{if(e.target===pal)openPal(false)};$("#btnPalette").onclick=()=>openPal(true);
+addEventListener("keydown",e=>{
+ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"){e.preventDefault();openPal(pal.hidden)}
+ else if(e.altKey&&e.key.toLowerCase()==="t"){e.preventDefault();cycle()}
+ else if(e.key==="Escape"){openPal(false);openDr(false);nav(false)}});
+/* peer filter + unread title */
+const ps=$("#peerSearch"),plist=$("#peerList");
+function filt(){const q=ps.value.toLowerCase();$$("#peerList .peer").forEach(p=>p.style.display=p.textContent.toLowerCase().includes(q)?"":"none")}
+ps.oninput=filt;
+new MutationObserver(()=>{filt();const n=$$("#peerList .unread").reduce((a,u)=>a+(+u.textContent||0),0);document.title=(n?`(${n}) `:"")+"NexTalk"}).observe(plist,{childList:true});
+/* surface log errors/warnings as toasts */
+new MutationObserver(m=>m.forEach(r=>r.addedNodes.forEach(n=>{if(n.className==="err"||n.className==="warn")toast((S.adv?n.textContent:n.textContent.replace(/^\[[^\]]*\]\s*/,"")).slice(0,160),n.className)}))).observe($("#log"),{childList:true});
+/* click bubble to copy */
+$("#messages").addEventListener("click",e=>{const b=e.target.closest(".bubble");if(!b)return;const t=[...b.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join("");navigator.clipboard&&navigator.clipboard.writeText(t).then(()=>toast("Message copied"),()=>{})});
+sync();window.ntToast=toast;
+})();
+</script>
+
+<script>
+(function(){
+const {S,save}=window.NTUI,$=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],root=document.documentElement,LSN="nextalk_nicks_v1";
+const on=s=>$(s).classList.contains("on"),J=(k)=>{try{return JSON.parse(localStorage.getItem(k)||"{}")}catch(e){return{}}};
+const normUrl=v=>{v=(v||"").trim();if(!v)return"";if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(v))v="https://"+v;try{const u=new URL(v);if(!/^https?:$/.test(u.protocol)||!u.hostname)return"";return u.origin+u.pathname.replace(/\/+$/,"")}catch(e){return""}},
+saveUrl=x=>{const s=J("nextalk_settings_v1");s.workerUrl=x;localStorage.setItem("nextalk_settings_v1",JSON.stringify(s));$("#setWorkerUrl").value=x};
+$("#obUrl").value=J("nextalk_settings_v1").workerUrl||"";
+const wait=(f,ms)=>new Promise(r=>{const t=Date.now();(function p(){if(f())return r(true);if(Date.now()-t>ms)return r(false);setTimeout(p,150)})()});
+const short=id=>id.length>14?id.slice(0,6)+"…"+id.slice(-4):id;window.ntName=id=>J(LSN)[id]||short(id);
+function mode(){root.dataset.adv=S.adv?"on":"off";const b=$("#btnAdv");b.classList.toggle("primary",!!S.adv);b.textContent=S.adv?"Advanced: on":"Advanced";$("#cAdv").checked=!!S.adv;$("#btnAddPeer").textContent=S.adv?"+ add peer":"＋ New chat";deco()}
+$("#btnAdv").onclick=()=>{S.adv=!S.adv;save();mode();ntToast(S.adv?"Advanced mode on":"Simple mode")};
+$("#cAdv").onchange=e=>{S.adv=e.target.checked;save();mode()};
+/* friendly names, previews, header */
+function deco(){const N=J(LSN),P=A().state.peers,k=Object.keys(P),nm=id=>N[id]||(id.startsWith("group:")&&P[id]?P[id].name:(S.adv?id:short(id)));
+ $$("#peerList .peer").forEach((el,i)=>{const id=k[i];if(!id)return;const n=el.querySelector(".peer-name"),t=nm(id);if(n.textContent!==t)n.textContent=t;
+  const av=el.querySelector(".avatar"),ini=t.slice(0,2).toUpperCase();if(av.textContent!==ini)av.textContent=ini;
+  let pv=el.querySelector(".peer-prev");if(!pv){pv=document.createElement("div");pv.className="peer-prev";el.querySelector(".peer-meta").appendChild(pv)}
+  const m=(P[id].messages||[]).filter(x=>!x.system).pop(),tx=m?(m.me?"You: ":"")+m.text:(P[id].established?"Secure chat ready":"Waiting to connect…");if(pv.textContent!==tx)pv.textContent=tx});
+ const els=$$("#peerList .peer"),a=k[els.findIndex(e=>e.classList.contains("active"))];
+ if(a){const h=$("#chatPeerName"),s=$("#chatPeerSub"),t=nm(a),est=P[a].established,st=a.startsWith("group:")?"Group · every member gets their own encrypted copy":S.adv?(est?"session established · double ratchet active":P[a].pending?"offer sent — waiting for the answer":"no established session yet"):(est?"End-to-end encrypted":P[a].pending?"Waiting for them to come online…":"Not connected yet");
+  if(h.textContent!==t)h.textContent=t;if(s.textContent!==st)s.textContent=st;h.title="Click to rename";const gd=a.startsWith("group:")?"none":"";$("#btnVerify").style.display=gd;$("#btnReconnect").style.display=gd}
+ const id=$("#idText").textContent;$("#pcId").textContent=id?short(id):"Not signed in yet"}
+const mo=new MutationObserver(deco);[["#peerList"],["#chatPeerName"],["#chatPeerSub"],["#idText"]].forEach(([s])=>mo.observe($(s),{childList:true}));
+
+/* status chip + overlay: the welcome overlay hides once online OR once a saved vault was unlocked */
+function st(){const w=$("#dotWasm").className,r=on("#dotRelay");let c="warn",t="Starting…";
+ if(w.includes("on")){if(r){c="on";t="Online"}else{c="off";t="Not connected"}}else if(w.includes("off")&&$("#statusWasm").textContent!=="wasm loading…"){c="off";t="Can't start"}
+ $("#ssDot").className="dot "+c;$("#ssText").textContent=t;
+ root.dataset.ready=(r||root.dataset.restored==="1")?"on":"off"}
+const mo2=new MutationObserver(st);["#dotWasm","#dotRelay","#dotListen"].forEach(s=>mo2.observe($(s),{attributes:true,attributeFilter:["class"]}));
+mo2.observe($("#idText"),{childList:true});
+
+/* one-tap setup */
+async function start(){const b=$("#obStart"),m=$("#obMsg"),say=(t,e)=>{m.textContent=t;m.className=e?"err":""},fail=t=>{say(t,1);b.disabled=false;b.textContent="Try again"};
+ b.disabled=true;const nu=on("#dotRelay")?"":normUrl($("#obUrl").value);if(!on("#dotRelay")&&!nu)return fail("Enter your server address first, e.g. https://example.com");say("Starting secure engine…");
+ if(!await wait(()=>on("#dotWasm"),15000))return fail("The encryption engine didn't load. Make sure the wasm folder sits next to this page.");
+ if(!$("#idText").textContent){say("Creating your private identity…");$("#btnInit").click();if(!await wait(()=>$("#idText").textContent,4000))return fail("Couldn't create your identity.")}
+ if(!on("#dotRelay")){say("Connecting…");$("#workerUrl").value=nu;saveUrl(nu);$("#btnConnectWorker").click();
+  if(!await wait(()=>on("#dotRelay"),12000))return fail("Couldn't reach the server. Check your connection and try again.")}
+ say("");b.disabled=false;b.textContent="Get started";ntToast("You're online");vstate();window.ntOfferVault&&ntOfferVault()}
+$("#btnCheck").onclick=()=>{if(!on("#dotRelay"))return ntToast("Tap “Get started” first.","warn");$("#btnListen").click()};
+
+/* modal + new chat + rename */
+const M=$("#modal"),mi=$("#mIn");let cb=null;
+function ask(t,s,v,ok,fn,type){$("#mTitle").textContent=t;$("#mSub").textContent=s;$("#mSub").classList.toggle("mono",type==="none");mi.type=type==="password"?"password":"text";mi.style.display=type==="none"?"none":"";mi.value=v||"";$("#mOk").textContent=ok;cb=fn;M.hidden=false;type==="none"?$("#mOk").focus():mi.focus()}
+const close=()=>{M.hidden=true;cb=null},fire=()=>{const v=mi.value.trim(),f=cb;close();f&&f(v)};
+$("#mCancel").onclick=close;M.onclick=e=>{if(e.target===M)close()};$("#mOk").onclick=fire;mi.onkeydown=e=>{if(e.key==="Enter")fire();if(e.key==="Escape")close()};
+document.addEventListener("click",e=>{if(S.adv||!e.target.closest("#btnAddPeer"))return;e.stopPropagation();e.preventDefault();
+ const tr=document.querySelector("#transportTabs .active");if((!tr||tr.dataset.t!=="offline")&&!on("#dotRelay"))return ntToast("Tap “Get started” first so you're online.","warn");
+ ask("New chat","Paste your friend's ID. They can copy it from their profile.","","Start chat",v=>{if(!v)return;const op=window.prompt;window.prompt=()=>v;try{$("#btnAddPeer").onclick()}finally{window.prompt=op}})},true);
+$("#chatPeerName").onclick=()=>{const P=Object.keys(A().state.peers),a=P[$$("#peerList .peer").findIndex(e=>e.classList.contains("active"))];if(!a)return;
+ ask("Rename chat","Only you can see this name.",J(LSN)[a]||"","Save",v=>{const N=J(LSN),old=N[a];v?N[a]=v:delete N[a];localStorage.setItem(LSN,JSON.stringify(N));deco();if(!a.startsWith("group:")&&NexTalk.contacts){try{if(old)NexTalk.contacts.remove(old);if(v){const r=NexTalk.contacts.add(v,a);if(r&&r.error)ntToast(r.error,"warn")}}catch(e){}ntPersist()}})};
+$("#pcCopy").onclick=()=>{if($("#idText").textContent){$("#btnCopyId").click();ntToast("ID copied — send it to a friend")}else ntToast("Tap “Get started” first.","warn")};
+$("#sbExport").onclick=()=>$("#btnExportId").click();$("#sbImport").onclick=()=>$("#btnLoadId").click();
+
+/* ---- encrypted "remember this device" vault: AES-GCM key from PBKDF2(passphrase). Keeps sessions alive across reloads
+   (a stale export desyncs the ratchet, so state is re-saved after every send/receive/handshake) ---- */
+const VK="nextalk_vault_v1",A=()=>window.ntApp;let vit=600000,vkey=null,vsalt=null,vt=null;
+const b64=u=>{let s="";for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)},ub64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const KDF_IT=600000,dk=async(p,s,it=KDF_IT)=>crypto.subtle.deriveKey({name:"PBKDF2",salt:s,iterations:it,hash:"SHA-256"},await crypto.subtle.importKey("raw",new TextEncoder().encode(p),"PBKDF2",false,["deriveKey"]),{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+
+/* persistent warning banner + welcome overlay wording + settings card.
+   Banner is hidden ONLY when a vault exists AND is unlocked. */
+function vstate(){
+ const e=!!localStorage.getItem(VK),locked=e&&!vkey,hasId=!!A().state.myId;
+ $("#vaultState").textContent=e?(vkey?"On — identity, sessions and contacts are stored encrypted in this browser and restored after a reload.":"Saved but locked — enter the passphrase to restore it."):"Off — closing this tab loses the encryption state of your chats. Turn it on to keep them.";
+ $("#vEnable").textContent=locked?"Unlock…":e?"Change passphrase…":"Enable…";
+ const ban=$("#vaultBanner");ban.hidden=!!(e&&vkey);
+ if(!ban.hidden){
+  if(locked){$("#vbText").textContent="Your saved chats are locked. Enter your password to restore them.";$("#vbBtn").textContent="Unlock"}
+  else if(!hasId){$("#vbText").textContent="No password set. Tap “Get started”, then choose a password, or your chats and keys will be lost when this tab reloads.";$("#vbBtn").textContent="Set password"}
+  else{$("#vbText").textContent="No password set. Your keys and chats are lost the moment you reload or close this tab. Set a password now.";$("#vbBtn").textContent="Set password"}
+ }
+ const b=$("#obStart");$("#obUrlWrap").hidden=locked&&!!J("nextalk_settings_v1").workerUrl;
+ if(locked){b.textContent="Unlock";$(".ob-card h2").textContent="Welcome back";$(".ob-card p").textContent="Enter your password to restore your chats."}
+ else if(!b.disabled&&b.textContent==="Unlock"){b.textContent="Get started";$(".ob-card h2").textContent="Welcome to NexTalk";$(".ob-card p").textContent="Private, end-to-end encrypted messages. No phone number or account needed."}
+}
+async function vsave(){if(!vkey||!A().state.myId)return;const x=NexTalk.exportIdentity();if(typeof x!=="string")return;const c=NexTalk.contacts.export(),iv=crypto.getRandomValues(new Uint8Array(12)),ct=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},vkey,new TextEncoder().encode(JSON.stringify({i:x,c:typeof c==="string"?c:"",p:A().state.peers,x:(window.NexTalk&&NexTalk.transport&&NexTalk.transport.export?NexTalk.transport.export():"")}))));localStorage.setItem(VK,JSON.stringify({v:2,it:vit,s:b64(vsalt),n:b64(iv),c:b64(ct)}));vstate()}
+window.ntPersist=()=>{if(!vkey)return;clearTimeout(vt);vt=setTimeout(()=>vsave().catch(e=>console.error("[vault]",e)),350)};
+async function venable(p){if(p.length<8)return ntToast("Use at least 8 characters.","warn");if(!A().state.myId)return ntToast("Create an identity first.","warn");vsalt=crypto.getRandomValues(new Uint8Array(16));vit=KDF_IT;vkey=await dk(p,vsalt,vit);await vsave();ntToast("Saved on this device (encrypted)")}
+window.ntVaultForget=()=>{vkey=null;clearTimeout(vt);localStorage.removeItem(VK);vstate()};
+function passPrompt(){ask("Set a password","At least 8 characters. Encrypts your keys, sessions, contacts, chats and extensions in this browser. A forgotten password can't be recovered.","","Save",p=>venable(p).catch(e=>ntToast(String(e.message||e),"err")),"password")}
+window.ntOfferVault=()=>{if(localStorage.getItem(VK)||sessionStorage.getItem("nt_vo"))return;sessionStorage.setItem("nt_vo","1");ask("Set a password?","Encrypt your keys and chats with a password so they survive a reload. Without one, everything is lost when this tab reloads. A forgotten password can't be recovered.","","Protect",p=>venable(p).catch(e=>ntToast(String(e.message||e),"err")),"password")};
+function unlockPrompt(){const raw=localStorage.getItem(VK);if(!raw)return;ask("Unlock NexTalk","Enter the password for the identity saved on this device.","","Unlock",async p=>{let d;try{const o=JSON.parse(raw),s=ub64(o.s),it=o.it||310000,k=await dk(p,s,it);d=JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:ub64(o.n)},k,ub64(o.c))));vsalt=s;vit=it;vkey=k;if(it<KDF_IT){vit=KDF_IT;vkey=await dk(p,s,KDF_IT)}}catch(e){ntToast("Wrong password","err");return unlockPrompt()}
+ try{if(d.c)NexTalk.contacts.import(d.c)}catch(e){}
+ await A().restore(d.i);
+ try{if(d.p)A().setPeers(d.p)}catch(e){}
+ try{if(d.x&&window.NexTalk&&NexTalk.transport&&NexTalk.transport.import){NexTalk.transport.import(d.x);window.ntExtRefresh&&ntExtRefresh()}}catch(e){}
+ try{if(it<KDF_IT)await vsave()}catch(e){}
+ root.dataset.restored="1";st();vstate();
+ const u=normUrl($("#workerUrl").value||J("nextalk_settings_v1").workerUrl||$("#obUrl").value),goOn=x=>{$("#workerUrl").value=x;saveUrl(x);$("#btnConnectWorker").click()};
+ if(u)goOn(u);else ask("Server address","Enter the address of your relay server to go online.","","Connect",v=>{const x=normUrl(v);x?goOn(x):ntToast("That doesn't look like a valid address.","warn")})},"password")}
+
+/* overlay button: Unlock if a vault is saved, otherwise Get started */
+$("#obStart").onclick=()=>{if(localStorage.getItem(VK)&&!vkey)return unlockPrompt();start()};
+/* banner button */
+$("#vbBtn").onclick=()=>{
+ if(localStorage.getItem(VK)&&!vkey)return unlockPrompt();
+ if(!A().state.myId)return ntToast("Tap “Get started” first, then set your password.","warn");
+ passPrompt()};
+
+window.ntBoot=()=>{
+ if(sessionStorage.getItem("nt_autoinit")){sessionStorage.removeItem("nt_autoinit");A().init();vstate();return}
+ vstate();unlockPrompt()};
+$("#vEnable").onclick=()=>{if(localStorage.getItem(VK)&&!vkey)return unlockPrompt();passPrompt()};
+$("#vForget").onclick=()=>{if(confirm("Delete the saved copy from this browser? (Your current tab keeps working, but you will lose everything on reload.)")){ntVaultForget();ntToast("Saved copy deleted","warn")}};
+$("#vExportC").onclick=()=>{const c=NexTalk.contacts.export(),a=document.createElement("a");a.href=URL.createObjectURL(new Blob([c],{type:"application/json"}));a.download="contacts.json";document.body.appendChild(a);a.click();a.remove()};
+$("#cAuto").checked=J("nextalk_settings_v1").auto!==false;
+$("#cAuto").onchange=e=>{const s=J("nextalk_settings_v1");s.auto=e.target.checked;localStorage.setItem("nextalk_settings_v1",JSON.stringify(s));A().state.auto=e.target.checked;A().schedulePoll()};
+/* ---- safety words + reconnect ---- */
+$("#btnVerify").onclick=()=>{const a=A().state.activePeer;if(!a||a.startsWith("group:"))return;
+ const r=NexTalk.sessions.fingerprint(a);if(r.error)return ntToast("No established session with this person yet.","warn");
+ const g=s=>s.split("-").map((w,i)=>(i&&i%4==0?"\n":i?" ":"")+w).join(""),mine=A().myFp(),theirs=A().fpOf(a),eng=r.fingerprint||"";
+ console.info("[verify] engine payload",r,{mine,theirs});
+ if(!mine||!theirs)return ntToast("Couldn’t derive safety words (encoding.toProquint unavailable).","err");
+ let t="Their words, from their ID (they must see these under “Your words”):\n"+g(theirs)+"\n\nYour words (they must see these under “Their words”):\n"+g(mine);
+ if(eng===mine)t+="\n\n⚠ This build’s sessions.fingerprint() returned YOUR OWN words, so it can’t vouch for their side. The page used their ID instead; rebuild the wasm so the engine derives it from the peer’s session key.";
+ else if(eng===theirs)t+="\n\n✓ The engine’s session key matches this ID.";
+ else if(eng)t+="\n\nEngine session words (should be identical on both devices):\n"+g(eng);
+ t+="\n\nRead both lists to each other over a call. Your “Your words” must equal their “Their words”, and the other way round. If both pairs match, nobody is in the middle.";
+ ask("Verify "+ntName(a),t,"","Close",null,"none")};
+$("#btnReconnect").onclick=async()=>{const a=A().state.activePeer;if(!a)return;if(!on("#dotRelay"))return ntToast("Tap “Get started” first so you're online.","warn");if(confirm("Start a fresh secure session with "+ntName(a)+"? Use this if messages stop decrypting."))await A().reconnectPeer(a)};
+mode();st();vstate();
+})();
+</script>
+
+<script>
+/* ============================================================
+ * NexTalk transport layer v2
+ * Two kinds of relay, chosen independently:
+ *   message relay - worker | offline | any enabled extension with "message"
+ *   file relay    - any enabled extension with "binary-transfer"
+ * Every extension call is feature-detected, so a host build that
+ * lacks a method gives a clear message instead of a crash.
+ * ============================================================ */
+(function(){
+"use strict";
+const $=s=>document.querySelector(s),A=()=>window.ntApp,T=()=>window.NexTalk&&NexTalk.transport,X=()=>window.NexTalk&&NexTalk.xfer;
+const toast=(t,k)=>window.ntToast&&ntToast(t,k);
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const b64=u=>{let s="";for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)};
+const ub64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const rd=f=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(new Uint8Array(r.result));r.onerror=no;r.readAsArrayBuffer(f)});
+const chips=a=>(a||[]).map(x=>`<span class="chip">${esc(x)}</span>`).join("");
+const httpsOk=u=>{try{const x=new URL(u);return x.protocol==="https:"||(x.protocol==="http:"&&["localhost","127.0.0.1"].includes(x.hostname))}catch(e){return false}};
+const fail=r=>{if(r&&r.error){toast(String(r.error),"err");return true}return false};
+
+/* ---- safe calls into the extension host / xfer ---- */
+async function call(obj,name,...a){
+  if(!obj)return{error:"extension bridge not available in this build"};
+  if(typeof obj[name]!=="function")return{error:`this extension host has no ${name}()`};
+  try{const r=await obj[name](...a);return r==null?{error:name+" returned nothing"}:r}catch(e){return{error:String(e&&e.message||e)}}
+}
+const tcall=(n,...a)=>call(T(),n,...a),xcall=(n,...a)=>call(X(),n,...a);
+
+/* ---- selection (persisted; contains no secrets) ---- */
+const LS="nextalk_transport_v1";let sel={msg:"worker",file:""};
+try{Object.assign(sel,JSON.parse(localStorage.getItem(LS)||"{}"))}catch(e){}
+const saveSel=()=>{try{localStorage.setItem(LS,JSON.stringify(sel))}catch(e){}};
+let exts=[];const info={},fails={};
+const isExt=()=>sel.msg.startsWith("x:"),curExt=()=>isExt()?sel.msg.slice(2):null;
+function load(){try{const t=T();exts=t&&t.list?((t.list()||{}).transports||[]):[]}catch(e){exts=[]}}
+const has=(x,c)=>x.enabled&&(x.capabilities||[]).includes(c);
+const msgExts=()=>exts.filter(x=>has(x,"message")),fileExts=()=>exts.filter(x=>has(x,"binary-transfer"));
+
+/* ---- sidebar: message relay tabs + file relay select ---- */
+function cfgHTML(id){const x=exts.find(e=>e.id===id);if(!x)return"";
+  return `<div class="muted">${esc(x.name||x.id)} — ${esc(x.description||"")}</div>${chips(x.capabilities)}
+  <label>Router URL</label><input type="text" data-k="router" placeholder="https://your-router.example.com">
+  <div class="row wide"><button class="primary" data-act="register" style="flex:1">register mailbox</button>${has(x,"message")?'<button data-act="poll">check now</button>':""}</div>
+  <details><summary class="muted">Attach an existing mailbox</summary>
+   <input type="text" data-k="mb" placeholder="mailbox id (hex)"><input type="text" data-k="sec" placeholder="read secret (hex)"><input type="text" data-k="shard" placeholder="shard url">
+   <div class="row wide"><button data-act="attach" style="flex:1">attach</button></div></details>
+  <pre class="muted" style="white-space:pre-wrap;word-break:break-all">${esc(info[id]||"")}</pre>`}
+function renderSide(){
+  load();
+  const tabs=[["worker","Worker"],["offline","Offline"]].concat(msgExts().map(x=>["x:"+x.id,x.name||x.id]));
+  if(!tabs.some(t=>t[0]===sel.msg))sel.msg="worker";
+  $("#transportTabs").innerHTML=tabs.map(t=>`<button data-t="${esc(t[0])}" class="${t[0]===sel.msg?"active":""}">${esc(t[1])}</button>`).join("");
+  const app=A();if(app)app.state.transport=isExt()?"ext":sel.msg;
+  $("#transportWorker").style.display=sel.msg==="worker"?"block":"none";
+  $("#transportOffline").style.display=sel.msg==="offline"?"block":"none";
+  const p=$("#transportExt");p.style.display=isExt()?"block":"none";p.dataset.ext=curExt()||"";if(isExt())p.innerHTML=cfgHTML(curExt());
+  const F=fileExts();if(!F.some(x=>x.id===sel.file))sel.file=F.length?F[0].id:"";
+  $("#fileRelay").innerHTML=F.length?F.map(x=>`<option value="${esc(x.id)}" ${x.id===sel.file?"selected":""}>${esc(x.name||x.id)}</option>`).join(""):'<option value="">none — enable a file-relay extension</option>';
+  const fc=$("#fileRelayCfg"),show=sel.file&&!(isExt()&&curExt()===sel.file);fc.dataset.ext=show?sel.file:"";fc.innerHTML=show?cfgHTML(sel.file):"";
+  $("#btnAttach").disabled=!sel.file;$("#btnAttach").title=sel.file?"Send a file":"No file relay enabled";
+  saveSel();
+}
+$("#transportTabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b){sel.msg=b.dataset.t;renderSide()}});
+$("#fileRelay").addEventListener("change",e=>{sel.file=e.target.value;renderSide()});
+async function onCfg(e){
+  const b=e.target.closest("[data-act]"),box=e.currentTarget,id=box.dataset.ext;if(!b||!id)return;
+  const v=k=>((box.querySelector(`[data-k=${k}]`)||{}).value||"").trim();b.disabled=true;
+  try{const a=b.dataset.act;let r;
+    if(a==="register"||a==="attach"){const router=v("router");if(router&&!httpsOk(router))return toast("Router must be https (http only for localhost).","err");
+      if(a==="register"){r=await tcall("register",id,{router});if(!r.error)info[id]="mailbox: "+r.mailbox_id+"\nshard: "+r.shard_url+"\nrouter: "+r.router_url+"\nread secret: "+r.read_secret+"\n(share mailbox + shard with people who write to you; keep the secret private)"}
+      else{r=await tcall("attach",id,{mailbox:v("mb"),secret:v("sec"),shard:v("shard"),router});if(!r.error)info[id]="attached to mailbox "+v("mb")}}
+    else if(a==="poll"){const n=await pollExt(id,true);if(n>=0)toast(n?n+" new":"Nothing new");return}
+    if(fail(r))return;A().persist();renderSide()}finally{b.disabled=false}
+}
+$("#transportExt").addEventListener("click",onCfg);$("#fileRelayCfg").addEventListener("click",onCfg);
+
+/* ---- receiving: poll every enabled message relay, with back-off ---- */
+async function pollExt(id,manual){
+  const r=await tcall("poll",id,{limit:50});
+  if(r.error){fails[id]=(fails[id]||0)+1;if(manual)toast(String(r.error),"err");return -1}
+  fails[id]=0;const ev=r.events||[];ev.forEach(A().handle);if(ev.length){A().syncSessions();A().persist()}return ev.length;
+}
+let pt=null,busy=false;
+function schedule(){clearTimeout(pt);pt=setTimeout(async()=>{
+  try{const app=A();if(!busy&&app&&app.state.auto&&app.state.myId&&T()){busy=true;
+    for(const x of msgExts()){if((fails[x.id]||0)>=5&&Math.random()<.8)continue;await pollExt(x.id,false)}}}
+  finally{busy=false;schedule()}},document.hidden?60000:5000)}
+
+/* ---- sending ---- */
+const peerRec=id=>{const P=A().state.peers;return P[id]=P[id]||{messages:[]}};
+async function sendVia(peer,text){           // 1:1 text through the selected extension relay
+  const id=curExt(),p=peerRec(peer),go=()=>tcall("sendMessage",id,peer,text,{mailbox:(p.route&&p.route.mailbox)||"",shard:(p.route&&p.route.shard)||""});
+  let r=await go();
+  if(r.error&&/mailbox|shard|address/i.test(String(r.error))){
+    const mailbox=prompt("This relay needs the recipient’s mailbox id (hex):");if(!mailbox)return r;
+    const shard=prompt("Recipient shard URL:")||"";if(shard&&!httpsOk(shard))return{error:"shard URL must be https"};
+    p.route={mailbox:mailbox.trim(),shard:shard.trim()};r=await go()}
+  return r;
+}
+async function sendText(peer,text){          // text over whichever message relay is active (no encrypt for extensions: host does it)
+  if(isExt())return sendVia(peer,text);
+  if(sel.msg==="offline")return{error:"offline mode: copy the message from the Offline Lab instead"};
+  const c=await NexTalk.encrypt(peer,text);if(!c||c.error)return c||{error:"encrypt failed"};
+  return NexTalk.relay.sendMessage(peer,c.ciphertext);
+}
+async function sendOffer(peer,offer){return tcall("sendOffer",curExt(),peer,offer)}
+async function sendGroup(cid,text){          // fan-out as 1:1 messages (extensions can't carry context envelopes)
+  const ctx=NexTalk.context,ms=ctx&&ctx.listMembers?ctx.listMembers(cid):null;if(!Array.isArray(ms))return{error:"context.listMembers unavailable"};
+  const app=A(),P=app.state.peers,name=(P["group:"+cid]||{}).name||"group";let sent=0,pending=0,failed=0;
+  for(const m of ms){const id=m.peer_id;if(!id||id===app.state.myId)continue;
+    if(!P[id]||!P[id].established){pending++;continue}
+    (await sendVia(id,`[${name}] ${text}`)).error?failed++:sent++}
+  return sent||pending||failed?{sent,pending,failed}:{error:"no members yet — add them under Group Contexts → Membership"};
+}
+
+/* ---- files over the file relay ---- */
+async function sendFile(f){
+  const app=A(),peer=app.state.activePeer;
+  if(!sel.file)return toast("Enable a file-relay extension first.","warn");
+  if(!peer||peer.startsWith("group:"))return toast("Open a 1:1 chat to send a file.","warn");
+  if(f.size>8*1048576)return toast("File is over 8 MiB.","warn");
+  const p=peerRec(peer);toast("Encrypting and uploading…");
+  const r=await xcall("send",sel.file,peer,{name:f.name,data:b64(await rd(f)),mailbox:(p.route&&p.route.mailbox)||"",shard:(p.route&&p.route.shard)||""});
+  if(fail(r))return;
+  const m="📎 "+f.name+" — download ticket:\n"+r.ticket,s=await sendText(peer,m);
+  app.push(peer,{me:true,text:m,ts:Date.now()});app.persist();
+  toast(s&&s.error?"Uploaded, but the ticket was not sent: "+s.error:"File sent",s&&s.error?"warn":undefined);
+}
+async function download(ticket,from){
+  if(!sel.file)return toast("Enable a file-relay extension first.","warn");
+  const r=await xcall("receive",sel.file,{ticket,from:from||""});if(fail(r))return;
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([ub64(r.data)]));a.download=(r.name||"file").replace(/[\\/]/g,"_");
+  document.body.appendChild(a);a.click();a.remove();toast("Saved "+a.download);
+}
+function decorate(el,m){const t=/download ticket:\s*(\S+)/.exec(m.text||"");if(!t)return;
+  const b=document.createElement("button");b.className="small";b.textContent="⬇ Download";b.style.marginTop="6px";
+  b.onclick=()=>download(t[1],m.from);el.appendChild(b)}
+$("#btnAttach").onclick=()=>$("#attachFile").click();
+$("#attachFile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(f)sendFile(f).catch(x=>toast(String(x.message||x),"err"))};
+$("#rGet").onclick=async()=>{const t=$("#rTicket").value.trim().replace(/^.*ticket:\s*/s,"").trim();if(!t)return toast("Paste a ticket first.","warn");
+  $("#rOut").textContent="Downloading…";await download(t,"");$("#rOut").textContent=""};
+window.NTT={isExt,send:sendVia,sendText,sendOffer,sendGroup,decorate,refresh:renderSide};
+
+/* ---- Extensions view: install / enable / remove ---- */
+window.ntExtRefresh=()=>{try{render()}catch(e){}};
+function render(){
+  const t=T(),ok=!!t;$("#extBanner").hidden=ok;$("#dbgExt").textContent=ok&&X()?"present":ok?"transport only":"missing";
+  if(!ok){$("#extList").innerHTML="";return}
+  load();
+  $("#extList").innerHTML=exts.length?exts.map(x=>{const roles=[(x.capabilities||[]).includes("message")?"message relay":"",(x.capabilities||[]).includes("binary-transfer")?"file relay":""].filter(Boolean);
+   return `<div class="card" data-id="${esc(x.id)}"><h4>${esc(x.name||x.id)} <span class="muted">v${esc(x.version)} · ${esc(x.id)}</span></h4>${chips(roles)}${chips(x.capabilities)}${chips((x.permissions||[]).map(p=>"perm:"+p))}<div class="muted">${esc(x.description||"")}</div><div class="muted" style="font-family:var(--mono)">sha256 ${esc((x.hash||"").slice(0,16))}…</div>
+   <div class="row"><button class="small ${x.enabled?"":"primary"}" data-act="toggle" data-on="${x.enabled?1:0}">${x.enabled?"Disable":"Enable"}</button><button class="small danger" data-act="remove">Remove</button></div>
+   ${x.enabled?'<div class="muted">Enabled — configure it in the sidebar under Transport (Advanced mode).</div>':""}</div>`}).join(""):'<div class="card"><div class="muted">No extensions installed.</div></div>';
+  renderSide();
+}
+$("#extList").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-act]");if(!b)return;const id=b.closest("[data-id]").dataset.id;let r;
+  if(b.dataset.act==="toggle")r=await tcall(b.dataset.on==="1"?"disable":"enable",id);
+  else if(b.dataset.act==="remove"){if(!confirm("Remove this extension?"))return;r=await tcall("remove",id)}
+  if(fail(r))return;A().persist();render();
+});
+$("#extFile").onchange=async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  try{const d=b64(await rd(f));let m={};if(T()&&T().inspect){m=await tcall("inspect",d);if(fail(m))return}
+    if(!confirm(`Install "${m.name||f.name}" ${m.version?"v"+m.version:""}?\nCapabilities: ${(m.capabilities||[]).join(", ")||"?"}\nPermissions: ${(m.permissions||[]).join(", ")||"none"}\nSHA-256: ${m.hash||"unknown"}\n\nIt starts disabled and never receives your keys.`))return;
+    const r=await tcall("install",d,false);if(fail(r))return;A().persist();render();toast("Installed — enable it when you’re ready")}catch(x){toast(String(x.message||x),"err")}
+};
+document.querySelector('[data-view=extensions]').addEventListener("click",render);
+$("#btnRescan").addEventListener("click",()=>setTimeout(render,50));
+let tries=0;(function wait(){if(T()||++tries>40){render();schedule();return}setTimeout(wait,250)})();
+})();
+</script>
+</body>
+</html>
