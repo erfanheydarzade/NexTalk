@@ -21,6 +21,7 @@ func newResolverState(t *testing.T) *registry.State {
 // The old implementation asked ResolvePeer first, whose verbatim passthrough
 // swallowed every group reference before mailbox lookup ever ran.
 func TestResolveThreadKeyGroupForms(t *testing.T) {
+	chdirTemp(t) // mailbox.Load writes <id>.mailbox.np into the CWD
 	st := newResolverState(t)
 	store, err := mailbox.Load("resolverIdentity")
 	if err != nil {
@@ -54,6 +55,7 @@ func TestResolveThreadKeyGroupForms(t *testing.T) {
 }
 
 func TestResolveThreadKeyPeerPrecedence(t *testing.T) {
+	chdirTemp(t) // mailbox.Load writes <id>.mailbox.np into the CWD
 	st := newResolverState(t)
 	store, err := mailbox.Load("resolverIdentity")
 	if err != nil {
