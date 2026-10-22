@@ -72,7 +72,7 @@ func Register() {
 	contextNs.Set("blockMember", js.FuncOf(guard(jsContextBlock)))
 	contextNs.Set("removeMember", js.FuncOf(guard(jsContextRemoveMember)))
 	contextNs.Set("listMembers", js.FuncOf(guard(jsContextListMembers)))
-	contextNs.Set("sendMulti", js.FuncOf(guard(jsContextSendMulti)))
+	contextNs.Set("sendMulti", js.FuncOf(async(guard(jsContextSendMulti)))) // async: does network I/O (see context.go)
 	contextNs.Set("getEffectiveRecipients", js.FuncOf(guard(jsContextGetEffectiveRecipients)))
 	contextNs.Set("drop", js.FuncOf(guard(jsContextDrop)))
 	ns.Set("context", contextNs)
@@ -97,6 +97,11 @@ func Register() {
 	offlineNs.Set("encrypt", js.FuncOf(guard(jsEncrypt)))
 	offlineNs.Set("decrypt", js.FuncOf(guard(jsDecrypt)))
 	ns.Set("offline", offlineNs)
+
+	// transport.go / xfer.go — runtime (extension) transports: .ntx packages,
+	// mailboxes, polling through internal/dispatch, file transfer. Mounted
+	// here and nowhere else, like every other concern.
+	mountTransport(ns)
 
 	// version/info — parity with the CLI always having a --version / a
 	// known binary identity; useful for JS to sanity-check it loaded the

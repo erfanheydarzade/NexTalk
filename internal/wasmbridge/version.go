@@ -18,5 +18,5 @@ var buildVersion = "dev"
 // feature-detect against something more precise than "does this key
 // exist" for every single call.
 func jsVersion(this js.Value, args []js.Value) any {
-	return ok(map[string]any{"version": buildVersion, "api": "2"})
+	return ok(map[string]any{"version": buildVersion, "api": "3"})
 }
