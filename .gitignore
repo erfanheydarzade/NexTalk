@@ -40,6 +40,8 @@ web/wasm/*
 *.json
 !manifest.json
 !verify.json
+!package.json
+!package-lock.json
 *.zip
 *.patch
 *.orig

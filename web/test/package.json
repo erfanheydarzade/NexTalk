@@ -1,0 +1,10 @@
+{
+  "name": "nextalk-web-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node --test ntx-host.test.mjs && node transport-smoke.mjs",
+    "test:e2e": "node e2e-messenger.mjs"
+  },
+  "devDependencies": { "playwright": "1.56.0" }
+}
