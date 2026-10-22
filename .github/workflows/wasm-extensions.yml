@@ -136,7 +136,7 @@ jobs:
       - name: Install browser test dependencies
         working-directory: web/test
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
       - name: Browser end-to-end test (nextalk-messenger.html)
