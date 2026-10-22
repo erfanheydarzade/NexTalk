@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,10 +19,13 @@ import (
 
 // stateFile persists enable/disable + install hashes + mailbox attachments.
 type stateFile struct {
-	Enabled map[string]bool         `json:"enabled"`
-	Hash    map[string]string       `json:"hash"`
-	Config  map[string]string       `json:"config,omitempty"` // id -> opaque config JSON
-	Attach  map[string][]Attachment `json:"attach,omitempty"` // id -> mailboxes
+	Enabled map[string]bool   `json:"enabled"`
+	Hash    map[string]string `json:"hash"`
+	// Files pins sha256(len|manifest|len|entry) of the bytes written to disk
+	// at install; Start re-checks it before anything is executed.
+	Files  map[string]string       `json:"files,omitempty"`
+	Config map[string]string       `json:"config,omitempty"` // id -> opaque config JSON
+	Attach map[string][]Attachment `json:"attach,omitempty"` // id -> mailboxes
 }
 
 // Attachment subscribes one mailbox on a transport for polling.
@@ -90,7 +95,7 @@ func (m *Manager) Dir() string { return m.dir }
 func (m *Manager) statePath() string { return filepath.Join(m.dir, "state.json") }
 
 func (m *Manager) loadState() error {
-	m.state = stateFile{Enabled: map[string]bool{}, Hash: map[string]string{}, Config: map[string]string{}, Attach: map[string][]Attachment{}}
+	m.state = stateFile{Enabled: map[string]bool{}, Hash: map[string]string{}, Files: map[string]string{}, Config: map[string]string{}, Attach: map[string][]Attachment{}}
 	raw, err := os.ReadFile(m.statePath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -109,6 +114,9 @@ func (m *Manager) loadState() error {
 	}
 	if m.state.Attach == nil {
 		m.state.Attach = map[string][]Attachment{}
+	}
+	if m.state.Files == nil {
+		m.state.Files = map[string]string{}
 	}
 	return nil
 }
@@ -220,6 +228,7 @@ func (m *Manager) Install(ctx context.Context, ntxPath string, enable bool) (*Ma
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return nil, err
 	}
+	var mfBytes, entryBytes []byte
 	for name, zf := range files {
 		if name != "manifest.json" && name != mf.Entry {
 			continue // ignore extras (icons, docs) for v1
@@ -234,8 +243,12 @@ func (m *Manager) Install(ctx context.Context, ntxPath string, enable bool) (*Ma
 			return nil, err
 		}
 		mode := os.FileMode(0o644)
+		if name == "manifest.json" {
+			mfBytes = data
+		}
 		if name == mf.Entry {
 			mode = 0o755
+			entryBytes = data
 		}
 		if err := os.WriteFile(filepath.Join(dest, name), data, mode); err != nil {
 			return nil, err
@@ -243,6 +256,7 @@ func (m *Manager) Install(ctx context.Context, ntxPath string, enable bool) (*Ma
 	}
 	_ = ctx
 	m.state.Hash[mf.ID] = hash
+	m.state.Files[mf.ID] = filesPin(mfBytes, entryBytes)
 	if _, seen := m.state.Enabled[mf.ID]; !seen {
 		m.state.Enabled[mf.ID] = enable
 	} else if enable {
@@ -267,6 +281,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 	defer m.mu.Unlock()
 	delete(m.state.Enabled, id)
 	delete(m.state.Hash, id)
+	delete(m.state.Files, id)
 	delete(m.state.Attach, id)
 	if m.state.Config != nil {
 		delete(m.state.Config, id)
@@ -306,31 +321,47 @@ func (m *Manager) Disable(ctx context.Context, id string) error {
 	return m.saveState()
 }
 
-// verifyHash re-hashes the installed files and compares to the pin.
-func (m *Manager) verifyHash(id string) error {
-	pinned, ok := m.state.Hash[id]
-	if !ok || pinned == "" {
-		return fmt.Errorf("transport: %q has no install hash", id)
+// filesPin is the on-disk integrity pin: a length-prefixed hash of the
+// manifest and entry bytes (length prefixes make the boundary unambiguous).
+func filesPin(manifest, entry []byte) string {
+	h := sha256.New()
+	var n [8]byte
+	for _, part := range [][]byte{manifest, entry} {
+		binary.BigEndian.PutUint64(n[:], uint64(len(part)))
+		h.Write(n[:])
+		h.Write(part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// verifyInstalled re-reads the installed files and compares them with the pin
+// recorded at install. It fails closed: a missing pin (install predates
+// integrity pinning) or any mismatch refuses to run the transport. It returns
+// the verified bytes so callers execute exactly what was checked.
+func (m *Manager) verifyInstalled(id string) (mf *Manifest, entryRaw []byte, err error) {
+	m.mu.Lock()
+	pinned := m.state.Files[id]
+	m.mu.Unlock()
+	if pinned == "" {
+		return nil, nil, fmt.Errorf("transport: %q has no integrity pin; reinstall the package", id)
 	}
 	mfRaw, err := os.ReadFile(filepath.Join(m.dir, id, "manifest.json"))
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	mf, err := ParseManifest(mfRaw)
+	mf, err = ParseManifest(mfRaw)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	entryRaw, err := os.ReadFile(filepath.Join(m.dir, id, mf.Entry))
+	entryRaw, err = os.ReadFile(filepath.Join(m.dir, id, mf.Entry))
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	// v1 pin covers manifest + entry bytes (package zip metadata excluded).
-	h := sha256.New()
-	h.Write(mfRaw)
-	h.Write(entryRaw)
-	_ = pinned // full-package pin recorded at install; file-level re-check here guards tampering
-	_ = mf
-	return nil
+	got := filesPin(mfRaw, entryRaw)
+	if subtle.ConstantTimeCompare([]byte(got), []byte(pinned)) != 1 {
+		return nil, nil, fmt.Errorf("transport: %q failed integrity check (files changed since install); reinstall the package", id)
+	}
+	return mf, entryRaw, nil
 }
 
 // killLive terminates a live transport of either runtime.
@@ -343,13 +374,9 @@ func killLive(t FrameTransport) {
 // spawn instantiates the transport runtime selected by manifest entry:
 // *.wasm modules run sandboxed under wazero, anything else spawns as an
 // external process speaking the stdio RPC.
-func (m *Manager) spawn(ctx context.Context, bin string, mf *Manifest, cfg []byte) (FrameTransport, error) {
+func (m *Manager) spawn(ctx context.Context, bin string, entryRaw []byte, mf *Manifest, cfg []byte) (FrameTransport, error) {
 	if strings.HasSuffix(strings.ToLower(mf.Entry), ".wasm") {
-		raw, err := os.ReadFile(bin)
-		if err != nil {
-			return nil, fmt.Errorf("transport: wasm read: %w", err)
-		}
-		return NewWASMTransport(ctx, raw, mf, cfg)
+		return NewWASMTransport(ctx, entryRaw, mf, cfg)
 	}
 	return NewProcessTransport(ctx, bin, mf, cfg)
 }
@@ -363,15 +390,11 @@ func (m *Manager) Start(ctx context.Context, id string) (FrameTransport, error) 
 	if !enabled {
 		return nil, fmt.Errorf("transport: %q is disabled", id)
 	}
-	mfRaw, err := os.ReadFile(filepath.Join(m.dir, id, "manifest.json"))
-	if err != nil {
+	if _, serr := os.Stat(filepath.Join(m.dir, id, "manifest.json")); serr != nil {
 		return nil, fmt.Errorf("transport: %q not installed", id)
 	}
-	mf, err := ParseManifest(mfRaw)
+	mf, entryRaw, err := m.verifyInstalled(id)
 	if err != nil {
-		return nil, err
-	}
-	if err := m.verifyHash(id); err != nil {
 		return nil, err
 	}
 	bin := filepath.Join(m.dir, id, mf.Entry)
@@ -379,7 +402,7 @@ func (m *Manager) Start(ctx context.Context, id string) (FrameTransport, error) 
 	m.mu.Lock()
 	cfg = m.state.Config[id]
 	m.mu.Unlock()
-	t, err := m.spawn(ctx, bin, mf, []byte(cfg))
+	t, err := m.spawn(ctx, bin, entryRaw, mf, []byte(cfg))
 	if err != nil {
 		return nil, err
 	}

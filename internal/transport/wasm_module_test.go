@@ -1,3 +1,5 @@
+//go:build !js
+
 package transport
 
 // Hand-assembled WASM queue module implementing the transport ABI, so the

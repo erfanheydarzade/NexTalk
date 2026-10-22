@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,7 +23,7 @@ type Process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.Reader
-	stderr *bytes.Buffer
+	stderr *cappedBuffer
 
 	mu    sync.Mutex
 	next  uint32
@@ -38,6 +40,7 @@ type rpcResult struct {
 func Spawn(path string, args []string, config []byte) (*Process, error) {
 	_ = config
 	cmd := exec.Command(path, args...)
+	cmd.Env = minimalEnv() // extensions never inherit the host environment
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("transport: spawn stdin: %w", err)
@@ -46,12 +49,12 @@ func Spawn(path string, args []string, config []byte) (*Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transport: spawn stdout: %w", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &cappedBuffer{max: 64 << 10}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("transport: spawn start %q: %w", path, err)
 	}
-	p := &Process{cmd: cmd, stdin: stdin, stdout: stdout, stderr: &stderr, pend: map[uint32]chan rpcResult{}, dying: make(chan struct{})}
+	p := &Process{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, pend: map[uint32]chan rpcResult{}, dying: make(chan struct{})}
 	go p.readLoop()
 	return p, nil
 }
@@ -200,4 +203,47 @@ func (p *Process) Wait() error {
 		return nil
 	}
 	return p.cmd.Wait()
+}
+
+// minimalEnv is the allowlist handed to native extensions.
+func minimalEnv() []string {
+	var env []string
+	for _, k := range []string{"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "USERPROFILE"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	// NTX_* is the transport namespace: explicitly meant for extensions.
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "NTX_") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+// cappedBuffer keeps at most max bytes (extra output is dropped), so a
+// misbehaving extension cannot exhaust memory through stderr.
+type cappedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	max int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if room := c.max - c.buf.Len(); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		c.buf.Write(p[:room])
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
 }

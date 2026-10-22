@@ -146,7 +146,7 @@ func (rt *RoutingTable) Expired() bool {
 //
 // These are the ONE place the "[1 type byte][data...]" framing used on top
 // of every relay.Relay.Send/Receive call is implemented. Originally this
-// lived unexported inside cmd/worker/envolpe.go; it is promoted here so
+// lived unexported inside cmd/worker/envelope.go; it is promoted here so
 // every caller of a Relay — the CLI worker transport, the wasm bridge, or
 // anything else built later — frames messages identically instead of each
 // reimplementing (and potentially drifting from) the same two lines.

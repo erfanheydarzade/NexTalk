@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"unicode/utf8"
@@ -43,12 +44,19 @@ type Event struct {
 	Message  string   `json:"message,omitempty"`
 	Context  string   `json:"context,omitempty"`
 	Actions  []Action `json:"actions,omitempty"`
+
+	// Additive fields (all omitempty) used by the browser UI: the raw
+	// relay mailbox key of an offer's sender, and group identifiers.
+	Pubkey    string `json:"pubkey,omitempty"`
+	ContextID string `json:"context_id,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // Action records an automatic follow-up the dispatcher performed.
 type Action struct {
-	Type string `json:"type"`
-	Peer string `json:"peer,omitempty"`
+	Type   string `json:"type"`
+	Peer   string `json:"peer,omitempty"`
+	Pubkey string `json:"pubkey,omitempty"`
 }
 
 // Sender delivers a reply frame toward recipientPub (raw 32B Ed25519).
@@ -138,11 +146,13 @@ func handleOffer(ctx context.Context, cl *Client.Client, send Sender, selfPriv e
 	// Peer is the sender's peer ID (not the raw pubkey hex): it is what
 	// completion, contacts, and every follow-up command resolve.
 	peer := offer.SenderId
+	pubHex := hex.EncodeToString(offer.IdPub)
 	return &Event{
-		Type: "offer",
-		Peer: peer,
+		Type:   "offer",
+		Peer:   peer,
+		Pubkey: pubHex,
 		Actions: []Action{
-			{Type: "answer_sent", Peer: peer},
+			{Type: "answer_sent", Peer: peer, Pubkey: pubHex},
 		},
 	}, nil
 }
@@ -196,9 +206,9 @@ func handleMultiMessage(cl *Client.Client, data []byte, d *Deps) (*Event, error)
 		}
 		return nil, fmt.Errorf("group message %s", describeDecryptError(err))
 	}
-	body := string(inbound.Plaintext)
+	body, enc := string(inbound.Plaintext), "utf-8"
 	if !utf8.Valid(inbound.Plaintext) {
-		body = base64.StdEncoding.EncodeToString(inbound.Plaintext)
+		body, enc = base64.StdEncoding.EncodeToString(inbound.Plaintext), "base64"
 	}
 	if d.Mailbox != nil {
 		if err := d.Mailbox.AppendGroupIncoming(
@@ -211,10 +221,13 @@ func handleMultiMessage(cl *Client.Client, data []byte, d *Deps) (*Event, error)
 		}
 	}
 	return &Event{
-		Type:    "group_message",
-		Sender:  inbound.Sender,
-		Context: inbound.DisplayName(),
-		Message: body,
+		Type:      "group_message",
+		Sender:    inbound.Sender,
+		Context:   inbound.DisplayName(),
+		Message:   body,
+		Encoding:  enc,
+		ContextID: string(inbound.ContextID()),
+		MessageID: string(inbound.Meta.MessageID),
 	}, nil
 }
 

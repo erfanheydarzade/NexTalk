@@ -191,27 +191,33 @@ func jsContextListMembers(this js.Value, args []js.Value) any {
 }
 
 // jsContextSendMulti sends a multi-recipient message.
-// Usage: NexTalk.context.sendMulti(context_id, message)
-// Returns: { message_id, deliveries: [{ recipient, status, error }] }
+// Usage: await NexTalk.context.sendMulti(context_id, message)
+// Returns (Promise): { message_id, deliveries: [{ recipient, status, error }] }
+//
+// MUST be registered through async(guard(...)) (see register.go): with a
+// relay attached SendMultiMessage does network I/O, and a synchronous
+// js.FuncOf that waits on fetch deadlocks the Go runtime. For the same
+// reason st.mu is NOT held across the send — a synchronous call such as
+// NexTalk.id() would block the event loop that the pending fetch needs.
+// Errors reject the Promise (like every other async call).
 func jsContextSendMulti(this js.Value, args []js.Value) any {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	if st.Fanout == nil {
-		return map[string]any{"error": "no contexts initialized"}
-	}
-
 	if len(args) < 2 {
-		return map[string]any{"error": "missing context_id or message"}
+		return failStr("missing context_id or message")
 	}
-
 	ctxID := multimsg.ContextID(args[0].String())
 	message := args[1].String()
 
+	st.mu.Lock()
+	fanout := st.Fanout
+	st.mu.Unlock()
+	if fanout == nil {
+		return failStr("no contexts initialized")
+	}
+
 	// Get effective recipients
-	policies, err := st.Fanout.ListRecipientPolicies(ctxID)
+	policies, err := fanout.ListRecipientPolicies(ctxID)
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("context not found: %v", err)}
+		return failStr(fmt.Sprintf("context not found: %v", err))
 	}
 
 	var recipients []string
@@ -222,12 +228,12 @@ func jsContextSendMulti(this js.Value, args []js.Value) any {
 	}
 
 	if len(recipients) == 0 {
-		return map[string]any{"error": "no enabled recipients in context"}
+		return failStr("no enabled recipients in context")
 	}
 
-	result, err := st.Fanout.SendMultiMessage(context.Background(), ctxID, []byte(message), recipients)
+	result, err := fanout.SendMultiMessage(context.Background(), ctxID, []byte(message), recipients)
 	if err != nil {
-		return map[string]any{"error": fmt.Sprintf("send multi failed: %v", err)}
+		return failStr(fmt.Sprintf("send multi failed: %v", err))
 	}
 
 	deliveries := make([]any, 0, len(result.Deliveries))

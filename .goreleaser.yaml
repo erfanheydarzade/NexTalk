@@ -76,6 +76,8 @@ checksum:
     - glob: ./dist-release/nextalk_{{ .Tag }}.wasm
     - glob: ./dist-release/wasm_exec_{{ .Tag }}.js
     - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.version.json
+    - glob: ./dist-release/relay-example-wasm_{{ .Tag }}.ntx
+    - glob: ./dist-release/nextalk-messenger_{{ .Tag }}.html
 changelog:
   # A concise, human-clean release body instead of the raw commit log:
   # grouped by type, with merge commits and CI noise filtered out.
@@ -126,3 +128,5 @@ release:
     - glob: ./dist-release/nextalk_{{ .Tag }}.wasm
     - glob: ./dist-release/wasm_exec_{{ .Tag }}.js
     - glob: ./dist-release/nextalk-wasm_{{ .Tag }}.version.json
+    - glob: ./dist-release/relay-example-wasm_{{ .Tag }}.ntx
+    - glob: ./dist-release/nextalk-messenger_{{ .Tag }}.html

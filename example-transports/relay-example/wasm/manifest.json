@@ -1,0 +1,12 @@
+{
+  "id": "relay-example-wasm",
+  "name": "Relay Example (in-tab queue)",
+  "version": "1.0.0",
+  "api_version": "1",
+  "entry": "relay-example.wasm",
+  "capabilities": [
+    "message"
+  ],
+  "permissions": [],
+  "description": "Browser build of the relay-example template: an in-memory loopback queue running as WebAssembly inside the tab. No network, no keys, opaque frames only."
+}

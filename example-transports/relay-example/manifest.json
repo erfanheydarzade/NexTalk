@@ -1,0 +1,12 @@
+{
+  "id": "relay-example",
+  "name": "Relay Example (local queue)",
+  "version": "1.0.0",
+  "api_version": "1",
+  "entry": "relay-example",
+  "capabilities": [
+    "message"
+  ],
+  "permissions": [],
+  "description": "Third-party template: filesystem-backed local transport. No network, no keys, opaque frames only."
+}

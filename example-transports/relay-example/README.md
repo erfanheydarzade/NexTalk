@@ -24,6 +24,47 @@ opaque bytes the core encrypted.
 4. Keep the trust rule: frames are opaque; never add key fields to the RPC.
 5. Build, package, install — no NexTalk rebuild, ever.
 
+## Build everything automatically
+
+```bash
+node build-all.mjs               # every extension: native (this OS) + browser .wasm  -> dist/*.ntx
+node build-all.mjs --wasm-only   # no Go needed
+node build-all.mjs --all-targets # native for linux/darwin/windows x amd64/arm64
+```
+
+Extensions are discovered, not registered: any directory with a `manifest.json`
+(native, needs `go.mod`) and/or `wasm/manifest.json` (browser) is built. Browser
+packages are validated with NexTalk's own manifest rules and ABI-v1-verified
+before they are written; output is reproducible (fixed timestamps), so the
+sha256 NexTalk pins at install is stable. `dist/SHA256SUMS` lists every pin.
+Run it locally or from your own CI; `dist/` is git-ignored.
+
+## Native vs browser packages
+
+| | `relay-example` | `relay-example-wasm` |
+|---|---|---|
+| runs in | the CLI (separate process) | the CLI **and the browser** |
+| entry | executable | `relay-example.wasm` |
+| storage | filesystem queue | in-memory loopback queue (this tab) |
+
+A browser has no filesystem and cannot spawn processes, so only `.wasm`
+packages install there; the native package is rejected with a clear error.
+
+### Writing a WASM transport
+
+Implement ABI v1 (see NexTalk `internal/transport/wasm.go`): export `memory`,
+`ntx_init`, `ntx_caps`, `ntx_start`, `ntx_stop`, `ntx_send`, `ntx_attach`,
+`ntx_detach`, `ntx_poll`, `ntx_status` (and optionally `ntx_alloc`). The only
+allowed import is `ntx.log`. Put the manifest in `wasm/manifest.json`, then
+either commit the built `<entry>.wasm` next to it or add `wasm/build.mjs`
+(`node build.mjs <outDir>` must write `<outDir>/<entry>`). Declare only
+capabilities the module reports from `ntx_caps` — the host refuses a module
+that claims more than its manifest. Check a module on its own with
+`node tools/verify-wasm.mjs my.wasm --caps message`.
+
+Limits of ABI v1: no register/resolve/file-transfer operations, so
+`binary-transfer` cannot be implemented as WASM yet.
+
 ## Build
 
 ```bash

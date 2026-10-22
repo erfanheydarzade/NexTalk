@@ -30,7 +30,7 @@ cmd/nextalk-wasm/main.go   build tag + wasmbridge.Register() + select{}
 ```
 
 Each concern gets its own file, the same way `cmd/worker` is split across
-`worker.go` / `register.go` / `envolpe.go` / `connect.go` / `encrypt.go` /
+`worker.go` / `register.go` / `envelope.go` / `connect.go` / `encrypt.go` /
 ... instead of one command doing everything, and the same way `cmd/offline`
 splits `offer.go` / `accept.go` / `finish.go` / `encrypt.go` / `decrypt.go`.
 `register.go` is the wasm build's answer to that pattern: it is the one
@@ -59,7 +59,7 @@ with the same helpers `cmd/worker` uses:
 
 - `relay.SendEnvelope(ctx, r, senderPriv, recipientPubKey, type, data)`
   and `relay.WrapEnvelope`/`relay.PeerIDToEd25519Pub` — promoted out of
-  what used to be `cmd/worker`-private `envolpe.go` into
+  what used to be `cmd/worker`-private `envelope.go` into
   `internal/relay/relay.go`, so both the CLI and the wasm bridge call the
   *same* function instead of two copies that could drift.
 - `workerrelay.UnwrapEnvelope` — already exported, unchanged.
@@ -324,6 +324,76 @@ a demo/tab-per-peer setup; a session-keyed registry replacing the single
 global `state` is the natural next step for a real multi-identity UI (see
 `web/index.html` for a two-tab, real-relay demo built on top of exactly
 this API).
+
+## Extension transports (API revision 3)
+
+`NexTalk.transport.*`, `NexTalk.xfer.*` and `NexTalk.ticket.*` expose the runtime
+transport system (`.ntx` packages) to the page. Logic lives in `internal/ntxhost`
+(no build tags, tested natively); `internal/wasmbridge/{transport,xfer,jshost}.go`
+is only js.Value glue.
+
+```
+NexTalk.transport.inspect(ntxB64)            -> { id, name, version, capabilities, permissions, description, hash, entry }  // no side effects
+NexTalk.transport.install(ntxB64, enable?)   -> { id, hash }     // disabled unless enable === true
+NexTalk.transport.list()                     -> { transports: [...] }
+NexTalk.transport.enable(id) / disable(id) / remove(id) -> { ok }
+NexTalk.transport.status(id)                 -> { running, detail }   // never starts the runtime
+await NexTalk.transport.register(id, { router })        -> { mailbox_id, read_secret, shard_url, router_url }  // auto-attaches
+await NexTalk.transport.attach(id, { mailbox, secret, shard, router }) -> { ok }
+NexTalk.transport.detach(id, mailbox)        -> { ok }
+await NexTalk.transport.resolve(id, { to, router })     -> { mailbox_id, shard_url }
+await NexTalk.transport.poll(id, { mailbox?, limit? }) -> { events }   // same event shapes as relay.listen()
+await NexTalk.transport.sendMessage(id, peer, textOr{bytes}, { mailbox?, shard? }) -> { ok }
+NexTalk.transport.export() -> JSON string      NexTalk.transport.import(json) -> { ok }
+await NexTalk.xfer.send(id, peer, { name, data, mailbox?, shard? }, onProgress?) -> { ticket, transfer_id, expires }
+await NexTalk.xfer.receive(id, { ticket, from? }, onProgress?)                   -> { name, data }
+NexTalk.ticket.describe(ticketB64)           -> { transfer_id, shard, name, size, sender, expires }
+```
+
+Everything that does network I/O or starts a runtime is a Promise (it rejects with
+an `Error`); a synchronous `js.FuncOf` that waits on `fetch` deadlocks the Go runtime.
+
+**WASM-only.** The browser has no filesystem and cannot spawn processes, so only
+packages whose manifest `entry` ends in `.wasm` run. `install`/`inspect`/`import`
+reject process-model packages. Unknown capabilities/permissions are refused (fail
+closed), installs are disabled by default, and the package sha256 is pinned at
+install and re-verified on `enable`, on every runtime start, and on `import`.
+A module may not claim a capability its manifest did not declare.
+
+**Runtime choice: JS `WebAssembly`, not wazero.** I could not verify that wazero's
+interpreter builds and runs under `GOOS=js GOARCH=wasm`, so wazero is compiled out of
+js builds (`wasm.go` is `//go:build !js`, `wasm_js.go` is a stub) and `web/wasm/ntx-host.js`
+implements the same ABI v1 (`(ptr,len)` args, `ptr<<32|len` results, BE32-prefixed poll
+blobs) on the browser engine. Load it after the bridge and call
+`NexTalkTransportHost.register(NexTalk)`. If someone verifies wazero under js, `jsSpawn`
+can be swapped for `transport.NewWASMTransport` unchanged. Native tests use wazero.
+Deviation: for modules without `ntx_alloc`, the JS host bump-allocates inside the scratch
+region instead of reusing one address for every blob of a call.
+
+**Limits to know about.**
+- ABI v1 has no register/resolve/xfer ops. `register`/`resolve` are done by core against
+  the Router (worker protocol; the identity key signs locally and never reaches the module);
+  the module only receives the mailbox bearer. A `.wasm` package that declares
+  `binary-transfer` installs fine but `xfer.*` fails with an explicit error until an ABI
+  revision adds transfer ops. `xfer.*` works against any runtime implementing
+  `transport.FileTransport` (the tests use a fake). Transfers are capped at 8 MiB.
+- Tickets carry no expiry, so `ticket.describe().expires` is `null`; `xfer.send` returns the
+  server's `expires`.
+- Polling without `{mailbox}` only drains mailboxes attached by the current identity.
+
+**Export format.** `export()` returns JSON `{ version, transports: [{ id, hash, package(base64),
+enabled, attachments: [{ mailbox, read_secret, shard, router, owner }] }] }`. **It contains
+`read_secret` bearers: JS must store it encrypted.** It never contains identity keys.
+`import()` is all-or-nothing, replaces the registry, re-verifies every hash, and restores
+transports enabled only if flagged. The pin travels in the same document, so this detects
+corruption and partial tampering, not someone who rewrites package and hash together.
+
+**Other changes in this revision.** `context.sendMulti` is async (and no longer holds the
+state lock across the send). `encrypt` accepts `{ bytes: base64 }`; `decrypt` returns
+`encoding: "utf-8" | "base64"`. `relay.listen()` now runs through `internal/dispatch`
+(events gained `pubkey`, `context_id`, `message_id`, and `encoding` on group messages).
+Browser clients no longer call `SaveClient`, which would write `<id>.json` (private keys)
+to any filesystem the runtime exposes, e.g. under Node.
 
 ## Where this goes next
 

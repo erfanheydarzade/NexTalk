@@ -1,0 +1,159 @@
+name: WASM client & relay extensions
+
+# Builds everything that runs in the browser, on every relevant push / PR and on
+# demand, and proves it works:
+#   * relay extensions (.ntx, WebAssembly) - pure Node, no Go needed, reproducible
+#   * the Go client (nextalk.wasm + wasm_exec.js)
+#   * unit tests, a headless-Chromium end-to-end test of nextalk-messenger.html,
+#     and a check that the page's Content-Security-Policy is sealed.
+# Artifacts are uploaded to the run. Release assets are attached by release.yml
+# (so there is exactly one writer to a release).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "example-transports/**"
+      - "web/**"
+      - "cmd/nextalk-wasm/**"
+      - "internal/wasmbridge/**"
+      - "internal/transport/**"
+      - "internal/ntxhost/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/wasm-extensions.yml"
+  pull_request:
+    paths:
+      - "example-transports/**"
+      - "web/**"
+      - "cmd/nextalk-wasm/**"
+      - "internal/wasmbridge/**"
+      - "internal/transport/**"
+      - "internal/ntxhost/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/wasm-extensions.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extensions:
+    name: Build relay extensions (.ntx)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build
+        working-directory: example-transports
+        run: node build-all.mjs --wasm-only
+
+      - name: Reproducibility - a second build must be byte-identical
+        working-directory: example-transports
+        run: |
+          set -euo pipefail
+          cp dist/SHA256SUMS /tmp/first.sums
+          rm -rf dist
+          node build-all.mjs --wasm-only
+          diff /tmp/first.sums dist/SHA256SUMS
+          echo "reproducible:"; cat dist/SHA256SUMS
+
+      - name: Verify the module only exposes the ntx ABI
+        run: |
+          set -euo pipefail
+          cd /tmp && rm -rf x && mkdir x && cd x
+          unzip -q "$GITHUB_WORKSPACE"/example-transports/dist/relay-example-wasm.ntx
+          node - <<'JS'
+          const fs = require('fs');
+          const mf = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          WebAssembly.compile(fs.readFileSync(mf.entry)).then(m => {
+            const need = ['ntx_init','ntx_caps','ntx_start','ntx_stop','ntx_status','ntx_send','ntx_attach','ntx_detach','ntx_poll','memory'];
+            const have = WebAssembly.Module.exports(m).map(e => e.name);
+            const imps = WebAssembly.Module.imports(m).map(i => i.module + '.' + i.name);
+            const missing = need.filter(n => !have.includes(n));
+            const bad = imps.filter(i => i !== 'ntx.log');
+            if (missing.length || bad.length) { console.error({ missing, bad }); process.exit(1); }
+            console.log('ABI ok; imports:', imps.length ? imps.join(',') : 'none');
+          });
+          JS
+
+      - name: Host unit test
+        working-directory: web/test
+        run: node --test ntx-host.test.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextalk-extensions
+          path: |
+            example-transports/dist/*.ntx
+            example-transports/dist/SHA256SUMS
+          if-no-files-found: error
+
+  client:
+    name: Build nextalk.wasm + browser tests
+    runs-on: ubuntu-latest
+    needs: extensions
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build nextalk.wasm
+        run: bash ./cmd/nextalk-wasm/build.sh
+
+      - name: Go tests for the WASM host (wazero) and transport
+        run: go test ./internal/transport/... ./internal/ntxhost/...
+
+      - name: Vet the browser bridge for its real target (js/wasm)
+        run: GOOS=js GOARCH=wasm go vet ./internal/wasmbridge/... ./cmd/nextalk-wasm/...
+
+      - name: Build extensions (input to the e2e test)
+        working-directory: example-transports
+        run: node build-all.mjs --wasm-only
+
+      - name: CSP is sealed (inline-script hashes match)
+        run: node web/tools/seal-csp.mjs --check
+
+      - name: Node smoke test (two identities over the WASM extension)
+        working-directory: web/test
+        run: node transport-smoke.mjs
+
+      - name: Install browser test dependencies
+        working-directory: web/test
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Browser end-to-end test (nextalk-messenger.html)
+        working-directory: web/test
+        run: node e2e-messenger.mjs
+
+      - name: Stage bundle
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/wasm
+          cp web/nextalk-messenger.html bundle/
+          cp web/wasm/nextalk.wasm web/wasm/wasm_exec.js web/wasm/ntx-host.js bundle/wasm/
+          cp example-transports/dist/relay-example-wasm.ntx bundle/
+          (cd bundle && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextalk-web-bundle
+          path: bundle
+          if-no-files-found: error
