@@ -48,7 +48,7 @@ func (q *queue) mboxPath(mailboxHex string) string {
 
 func (q *queue) attach(mailboxHex string, secret []byte) error {
 	if len(mailboxHex) != 32 || !isHex(mailboxHex) {
-		return fmt.Errorf("mailbox must be 64 hex chars")
+		return fmt.Errorf("mailbox must be 32 hex chars")
 	}
 	if len(secret) != 32 {
 		return fmt.Errorf("read_secret must be 32 bytes")
