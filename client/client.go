@@ -37,6 +37,13 @@ type Client struct {
 	Sessions         map[string]*crypto.SecurePeer `json:"sessions"`
 
 	eng *core.Engine // not serialised; injected on construction/load
+
+	// ephemeral disables SaveClient for this Client. Set by
+	// NewClientFromKeys (the wasm build): the browser owns persistence, and
+	// SaveClient would otherwise try to write <id>.json — private keys
+	// included — to whatever filesystem the runtime exposes (a real one
+	// under Node). The zero value keeps the CLI behaviour unchanged.
+	ephemeral bool
 }
 
 // ── Construction & persistence ────────────────────────────────────────────────
@@ -99,6 +106,7 @@ func NewClientFromKeys(id string, privEd ed25519.PrivateKey, pubEd ed25519.Publi
 		DilithiumPublic:  dilPub,
 		Sessions:         sessions,
 		eng:              core.NewEngine(),
+		ephemeral:        true,
 	}
 }
 
@@ -109,6 +117,9 @@ func NewClientFromKeys(id string, privEd ed25519.PrivateKey, pubEd ed25519.Publi
 // The explicit Chmod is belt-and-suspenders for files that may have been
 // created with looser permissions by older versions.
 func SaveClient(cl *Client) {
+	if cl.ephemeral {
+		return // caller (wasm bridge) owns persistence; never touch a filesystem
+	}
 	filename := fmt.Sprintf("%s.json", cl.Id)
 	data, err := json.MarshalIndent(cl, "", "  ")
 	if err != nil {
@@ -227,6 +238,16 @@ func (c *Client) Decrypt(payloadBytes []byte) (string, []byte, error) {
 	}
 
 	session, exists := c.Sessions[claimedSender]
+	if !exists {
+		// A message can arrive right after a handshake completes, before the
+		// pending session is promoted; accept it from the pending slot
+		// (same fallback the browser bridge always had).
+		if p, ok := c.Sessions["pending_"+claimedSender]; ok {
+			session, exists = p, true
+		} else if p, ok := c.Sessions["pending"]; ok {
+			session, exists = p, true
+		}
+	}
 	if !exists {
 		return "", nil, fmt.Errorf("no active session with user '%s'", claimedSender)
 	}
