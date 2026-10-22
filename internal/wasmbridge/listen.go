@@ -1,35 +1,42 @@
 //go:build js && wasm
 
-// Auto-dispatching poll, mirroring cmd/worker/listen.go's RunListen and
-// its dispatch/handleOffer/handleAnswer/handleMessage helpers: drains the
-// mailbox, accepts offers (and sends the answer back automatically),
+// Auto-dispatching poll, mirroring cmd/worker/listen.go's RunListen: drains
+// the mailbox, accepts offers (and sends the answer back automatically),
 // finishes handshakes, and decrypts messages — instead of leaving all of
 // that to JS the way relay.go's lower-level receive() does.
 //
-// The event shape ({type, peer, sender, encoding, message, actions}) is
-// the same as cmd/worker's ListenEvent/ListenAction JSON, so anything
-// already parsing `nextalk worker listen --format json` output can parse
-// NexTalk.relay.listen()'s output too. This is what "standard functions
-// and parameters, same as the worker part" means for the highest-level
-// call in the relay surface, not just the low-level Send/Receive plumbing.
+// The receive path is NOT implemented here: every frame goes through
+// internal/dispatch, the single shared dispatcher also used by
+// `nextalk worker listen`, the shell, and NexTalk.transport.poll(). Same
+// code, so the events ({type, peer, sender, encoding, message, actions,
+// pubkey, context_id, message_id}) and the dedupe of redelivered group
+// messages are identical whichever transport the frames arrived on.
 package wasmbridge
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
-	"errors"
 	"fmt"
+	"sync"
 	"syscall/js"
-	"unicode/utf8"
 
-	"github.com/erfanheydarzade/NexTalk/core"
-	"github.com/erfanheydarzade/NexTalk/crypto"
-	"github.com/erfanheydarzade/NexTalk/internal/multimsg"
+	"github.com/erfanheydarzade/NexTalk/internal/dispatch"
 	"github.com/erfanheydarzade/NexTalk/internal/relay"
-	workerrelay "github.com/erfanheydarzade/NexTalk/internal/relay/worker"
-	"golang.org/x/crypto/ed25519"
 )
+
+// dispatchMu serialises dispatch against other users of st.ActiveClient's
+// session map (relay.listen and transport.poll share it). It is held while
+// dispatch may send an answer; that is safe because no synchronous
+// js.FuncOf ever takes it.
+var dispatchMu sync.Mutex
+
+// dispatchDepsLocked builds the receive-side dependencies from the active
+// identity. Caller holds st.mu. Mailbox is nil on purpose: persistence is
+// the page's job (there is no filesystem), and events carry everything
+// needed to store a message.
+func dispatchDepsLocked() *dispatch.Deps {
+	ensureFanoutLocked()
+	return &dispatch.Deps{Client: st.ActiveClient, Fanout: st.Fanout}
+}
 
 // jsListen() -> Promise<{ events: [...] }>
 // One poll-and-dispatch pass, same as `nextalk worker listen`. A browser
@@ -39,13 +46,13 @@ import (
 // This function returns a JS Promise to avoid deadlocking the Wasm main thread.
 func jsListen(this js.Value, args []js.Value) any {
 	st.mu.Lock()
-	r, priv, id := st.relayConn, st.IdentityPrivate, st.Id
+	r, priv, id, cl := st.relayConn, st.IdentityPrivate, st.Id, st.ActiveClient
 	st.mu.Unlock()
 
 	if r == nil {
 		return failStr("not connected — call connectWorker(routerUrl) first")
 	}
-	if id == "" {
+	if id == "" || cl == nil {
 		return failStr("no identity loaded")
 	}
 
@@ -55,206 +62,27 @@ func jsListen(this js.Value, args []js.Value) any {
 		return fail(fmt.Errorf("receive: %w", err))
 	}
 
-	events := make([]any, 0, len(msgs))
+	st.mu.Lock()
+	deps := dispatchDepsLocked()
+	st.mu.Unlock()
+
+	frames := make([][]byte, 0, len(msgs))
 	for _, m := range msgs {
-		event, err := dispatchEnvelope(ctx, r, priv, m.Body)
-		if err != nil {
-			// Collect dispatch errors as events rather than aborting the
-			// batch, same as RunListen — one bad frame shouldn't hide the
-			// rest of the mailbox.
-			events = append(events, map[string]any{"type": "error", "message": err.Error()})
-			continue
-		}
-		if event != nil {
-			events = append(events, event)
-		}
+		frames = append(frames, m.Body)
 	}
-	return ok(map[string]any{"events": events})
-}
-
-// dispatchEnvelope routes one raw relay.Message body, exactly like
-// cmd/worker/listen.go's dispatch.
-func dispatchEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.PrivateKey, body []byte) (map[string]any, error) {
-	t, data, err := workerrelay.UnwrapEnvelope(body)
-	if err != nil {
-		return nil, fmt.Errorf("unwrap envelope: %w", err)
+	send := func(ctx context.Context, recipientPub []byte, t relay.Type, payload []byte) error {
+		return relay.SendEnvelope(ctx, r, priv, recipientPub, t, payload)
 	}
 
-	switch t {
-	case relay.TypeOffer:
-		return handleOfferEnvelope(ctx, r, selfPriv, data)
-	case relay.TypeAnswer:
-		return handleAnswerEnvelope(data)
-	case relay.TypeMessage:
-		return handleMessageEnvelope(data)
-	case relay.TypeMultiMsg:
-		return handleGroupMessageEnvelope(data)
-	default:
-		return nil, fmt.Errorf("unknown envelope type: %d", t)
+	dispatchMu.Lock()
+	// One bad frame becomes an {type:"error"} event; the rest of the
+	// mailbox is still processed (same as RunListen).
+	events := dispatch.DispatchBatch(ctx, cl, priv, frames, deps, send)
+	dispatchMu.Unlock()
+
+	out := make([]any, 0, len(events))
+	for _, e := range events {
+		out = append(out, e)
 	}
-}
-
-// handleOfferEnvelope mirrors cmd/worker/listen.go's handleOffer: accept
-// the offer against our session map, then send the answer straight back
-// to the sender's identity pubkey (offer.IdPub — no peer-ID roundtrip
-// needed here, we already have the raw key from the offer itself).
-func handleOfferEnvelope(ctx context.Context, r relay.Relay, selfPriv ed25519.PrivateKey, data []byte) (map[string]any, error) {
-	offer, err := core.DecodeOffer(data)
-	if err != nil {
-		return nil, fmt.Errorf("decode offer: %w", err)
-	}
-
-	st.mu.Lock()
-	senderID, peer, answerJSON, err := st.eng.AcceptOffer(
-		st.Id, st.IdentityPrivate, st.IdentityPublic,
-		st.DilithiumPrivate, st.DilithiumPublic,
-		st.Sessions, data,
-	)
-	if err == nil {
-		st.Sessions[senderID] = peer
-	}
-	st.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("accept offer: %w", err)
-	}
-
-	if err := relay.SendEnvelope(ctx, r, selfPriv, offer.IdPub, relay.TypeAnswer, answerJSON); err != nil {
-		return nil, fmt.Errorf("send answer: %w", err)
-	}
-
-	// "peer" MUST be the canonical base58 peer ID (senderID) — the same key
-	// st.Sessions is indexed by and the same form message/answer events use.
-	// The raw Ed25519 pubkey (hex) is only the relay mailbox address, so it
-	// is exposed separately as "pubkey" and never as the peer identity.
-	pubHex := hex.EncodeToString(offer.IdPub)
-	return map[string]any{
-		"type":   "offer",
-		"peer":   senderID,
-		"pubkey": pubHex,
-		"actions": []any{
-			map[string]any{"type": "answer_sent", "peer": senderID, "pubkey": pubHex},
-		},
-	}, nil
-}
-
-// handleAnswerEnvelope mirrors cmd/worker/listen.go's handleAnswer.
-func handleAnswerEnvelope(data []byte) (map[string]any, error) {
-	senderID, err := core.PeekAnswerSenderID(data)
-	if err != nil {
-		return nil, fmt.Errorf("peek answer header: %w", err)
-	}
-
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	peer, okp := st.Sessions["pending_"+senderID]
-	if !okp {
-		peer, okp = st.Sessions["pending"]
-		if !okp {
-			return nil, fmt.Errorf("no pending session found for %s", senderID)
-		}
-	}
-
-	peerID, err := st.eng.FinishHandshake(st.Id, peer, data)
-	if err != nil {
-		return nil, fmt.Errorf("finish handshake: %w", err)
-	}
-	delete(st.Sessions, "pending")
-	delete(st.Sessions, "pending_"+peerID)
-	st.Sessions[peerID] = peer
-
-	return map[string]any{
-		"type": "answer",
-		"peer": peerID,
-		"actions": []any{
-			map[string]any{"type": "session_established", "peer": peerID},
-		},
-	}, nil
-}
-
-// handleMessageEnvelope mirrors cmd/worker/listen.go's handleMessage.
-func handleMessageEnvelope(data []byte) (map[string]any, error) {
-	claimedSender, err := crypto.SenderIDFromFrame(data)
-	if err != nil {
-		return nil, err
-	}
-
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	// Fix: check pending or active sessions so messages coming in right
-	// after a handshake completion don't fail lookup.
-	session, exists := st.Sessions[claimedSender]
-	if !exists {
-		if pendingPeer, okp := st.Sessions["pending_"+claimedSender]; okp {
-			session = pendingPeer
-		} else if pendingPeer, okp := st.Sessions["pending"]; okp {
-			session = pendingPeer
-		} else {
-			return nil, fmt.Errorf("no active session with peer %s", claimedSender)
-		}
-	}
-	senderID, plaintext, err := session.Decrypt(data)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
-	}
-
-	event := map[string]any{"type": "message", "sender": senderID}
-	if utf8.Valid(plaintext) {
-		event["encoding"] = "utf-8"
-		event["message"] = string(plaintext)
-	} else {
-		event["encoding"] = "base64"
-		event["message"] = base64.StdEncoding.EncodeToString(plaintext)
-	}
-	return event, nil
-}
-
-// handleGroupMessageEnvelope processes an inbound multi-message (0x04)
-// delivery end-to-end — the browser equivalent of the shell's TypeMultiMsg
-// dispatch and `nextalk worker listen`'s group_message event:
-//
-//	decrypt over the 1:1 session → parse the embedded binding → verify the
-//	delivery was not transplanted → adopt the creator-signed group metadata
-//	(so JS learns the display name straight from the message) → dedupe
-//	redeliveries → emit a group_message event.
-func handleGroupMessageEnvelope(data []byte) (map[string]any, error) {
-	st.mu.Lock()
-	if st.Fanout == nil || st.ContextStore == nil {
-		ensureFanoutLocked()
-	}
-	fanout := st.Fanout
-	selfID := st.Id
-	st.mu.Unlock()
-
-	if fanout == nil {
-		return nil, fmt.Errorf("group message received but no identity is loaded")
-	}
-
-	inbound, err := fanout.ProcessDelivery(selfID, data)
-	if err != nil {
-		if errors.Is(err, multimsg.ErrDuplicateDelivery) {
-			// Already delivered in this page's lifetime; not worth surfacing.
-			return nil, nil
-		}
-		return nil, fmt.Errorf("group message %s", err.Error())
-	}
-
-	body := string(inbound.Plaintext)
-	encoding := "utf-8"
-	if !utf8.Valid(inbound.Plaintext) {
-		body = base64.StdEncoding.EncodeToString(inbound.Plaintext)
-		encoding = "base64"
-	}
-
-	event := map[string]any{
-		"type":       "group_message",
-		"sender":     inbound.Sender,
-		"context_id": string(inbound.ContextID()),
-		"context":    inbound.DisplayName(),
-		"message":    body,
-		"encoding":   encoding,
-		"message_id": string(inbound.Meta.MessageID),
-	}
-	return event, nil
+	return ok(map[string]any{"events": out})
 }
