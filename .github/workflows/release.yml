@@ -41,8 +41,10 @@ jobs:
     steps:
       - name: Validate version input
         id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}   # via env: never interpolate inputs into the script
         run: |
-          version="${{ inputs.version }}"
+          version="$INPUT_VERSION"
           if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::'$version' is not a valid semver tag (expected e.g. v1.4.0 or v1.4.0-rc.1)"
             exit 1
@@ -54,10 +56,12 @@ jobs:
           fetch-depth: 0
 
       - name: Create and push tag (no-op if it already exists)
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          tag="${{ steps.resolve.outputs.tag }}"
+          tag="$TAG"
           if git rev-parse "$tag" >/dev/null 2>&1; then
             echo "Tag $tag already exists, reusing it."
           else
@@ -85,6 +89,11 @@ jobs:
           go-version: "1.25.0"
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: go vet
         run: go vet ./...
 
@@ -100,7 +109,9 @@ jobs:
           rm -rf dist-wasm dist-release
           mkdir -p dist-release
           NEXTALK_VERSION="${RELEASE_TAG}" bash ./cmd/nextalk-wasm/build.sh dist-wasm/web/wasm
-          cp web/index.html dist-wasm/web/index.html
+          cp web/index.html web/nextalk-messenger.html dist-wasm/web/
+          cp web/wasm/ntx-host.js dist-wasm/web/wasm/ntx-host.js
+          node web/tools/seal-csp.mjs --check
           cp README.md LICENSE dist-wasm/
           cp -r docs dist-wasm/docs
           cat > dist-wasm/README-WASM.txt <<'EOF'
@@ -122,6 +133,14 @@ jobs:
           details and the full JS API.
           EOF
           tar -C dist-wasm -czf "dist-release/nextalk-wasm_${RELEASE_TAG}.tar.gz" .
+
+      # --- WebAssembly relay extensions (.ntx), built reproducibly with Node ---
+      - name: Build WASM extensions
+        run: |
+          set -euo pipefail
+          (cd example-transports && node build-all.mjs --wasm-only)
+          cp example-transports/dist/relay-example-wasm.ntx "dist-release/relay-example-wasm_${RELEASE_TAG}.ntx"
+          cp web/nextalk-messenger.html "dist-release/nextalk-messenger_${RELEASE_TAG}.html"
 
       # --- Loose WASM assets: for people who just want to grab the two
       # files and drop them in their own web app, with no tar/extract step
@@ -154,15 +173,18 @@ jobs:
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.prerelease }}" == "true" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$PRERELEASE" == "true" ]]; then
             gh release edit "${RELEASE_TAG}" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --draft=false \
               --prerelease
           else
             gh release edit "${RELEASE_TAG}" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --draft=false
           fi
