@@ -1,3 +1,5 @@
+//go:build !js
+
 // WASM transport runtime (wazero).
 //
 // A .wasm transport implements the function-call ABI below instead of the
@@ -43,11 +45,15 @@ type WASMTransport struct {
 	runtime  wazero.Runtime
 	mod      api.Module
 
-	mu      sync.Mutex
-	started bool
-	caps    []string
-	version string
-	logs    []string
+	// callMu serializes calls into the module and guards scratchOff; mu only
+	// guards logs (the log host import runs while callMu is held).
+	callMu     sync.Mutex
+	scratchOff uint32
+	mu         sync.Mutex
+	started    bool
+	caps       []string
+	version    string
+	logs       []string
 }
 
 // NewWASMTransport instantiates moduleBytes and runs ntx_init.
@@ -142,21 +148,24 @@ func (t *WASMTransport) writeMem(ctx context.Context, data []byte) (uint64, erro
 		}
 		return uint64(ptr), nil
 	}
-	// Fallback scratch at 1 MiB; modules without ntx_alloc must keep it free.
-	const scratch = 1 << 20
-	if uint64(len(data)) > 1<<20 {
-		return 0, fmt.Errorf("transport: wasm: arg too large")
+	// Fallback scratch at 1 MiB. Arguments of one call are bump-allocated so a
+	// later argument never overwrites an earlier one (callMu held by callers).
+	const scratch, span = 1 << 20, 1 << 20
+	if uint64(len(data)) > span || uint64(t.scratchOff)+uint64(len(data)) > span {
+		return 0, fmt.Errorf("transport: wasm: scratch region exhausted")
 	}
-	if !mem.Write(scratch, data) {
+	at := uint32(scratch) + t.scratchOff
+	if !mem.Write(at, data) {
 		// Grow memory once and retry.
 		if _, ok := mem.Grow(16); !ok {
 			return 0, fmt.Errorf("transport: wasm grow failed")
 		}
-		if !mem.Write(scratch, data) {
+		if !mem.Write(at, data) {
 			return 0, fmt.Errorf("transport: wasm: write out of bounds")
 		}
 	}
-	return scratch, nil
+	t.scratchOff += (uint32(len(data)) + 7) &^ 7
+	return uint64(at), nil
 }
 
 func (t *WASMTransport) callU32(ctx context.Context, name string, args ...uint64) (uint32, error) {
@@ -280,6 +289,9 @@ func (t *WASMTransport) requireStarted() error {
 // SendFrame implements FrameTransport (queue-model: explicit mailbox/shard
 // routing is ignored — the module routes locally; documented in the ABI).
 func (t *WASMTransport) SendFrame(ctx context.Context, frame Frame, to RouteHint) error {
+	t.callMu.Lock()
+	defer t.callMu.Unlock()
+	t.scratchOff = 0
 	if err := t.requireStarted(); err != nil {
 		return err
 	}
@@ -313,6 +325,9 @@ func (t *WASMTransport) SendFrame(ctx context.Context, frame Frame, to RouteHint
 // AttachMailbox implements FrameTransport (shard/router URLs are v1-ignored;
 // queue-model transports route locally — documented in the ABI header).
 func (t *WASMTransport) AttachMailbox(ctx context.Context, mailboxID, readSecret []byte, shardURL, routerURL string) error {
+	t.callMu.Lock()
+	defer t.callMu.Unlock()
+	t.scratchOff = 0
 	if err := t.requireStarted(); err != nil {
 		return err
 	}
@@ -341,6 +356,9 @@ func (t *WASMTransport) AttachMailbox(ctx context.Context, mailboxID, readSecret
 
 // DetachMailbox implements FrameTransport.
 func (t *WASMTransport) DetachMailbox(ctx context.Context, mailboxID []byte) error {
+	t.callMu.Lock()
+	defer t.callMu.Unlock()
+	t.scratchOff = 0
 	if err := t.requireStarted(); err != nil {
 		return err
 	}
@@ -363,6 +381,9 @@ func (t *WASMTransport) DetachMailbox(ctx context.Context, mailboxID []byte) err
 
 // PollFrames implements FrameTransport.
 func (t *WASMTransport) PollFrames(ctx context.Context, limit int, mailboxID []byte) ([][]byte, error) {
+	t.callMu.Lock()
+	defer t.callMu.Unlock()
+	t.scratchOff = 0
 	if err := t.requireStarted(); err != nil {
 		return nil, err
 	}
