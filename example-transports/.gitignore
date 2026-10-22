@@ -1,0 +1,5 @@
+dist/
+node_modules/
+*.exe
+relay-example/relay-example
+relay-example/data/

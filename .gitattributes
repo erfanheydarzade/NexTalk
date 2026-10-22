@@ -1,2 +1,11 @@
-# Auto detect text files and perform LF normalization
+# Normalize on commit; force LF for files that break under CRLF.
 * text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.go text eol=lf
+*.mjs text eol=lf
+*.html text eol=lf
+*.bat text eol=crlf
+*.wasm binary
+*.ntx binary
