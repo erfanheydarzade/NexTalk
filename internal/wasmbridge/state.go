@@ -4,7 +4,7 @@
 // equivalent of client.Client + a CLI transport (cmd/worker, cmd/offline,
 // ...) combined — but split into one small file per concern instead of one
 // monolithic main.go, the same way cmd/worker itself is split across
-// worker.go / register.go / envolpe.go / connect.go / encrypt.go / ...
+// worker.go / register.go / envelope.go / connect.go / encrypt.go / ...
 //
 //	state.go       shared in-memory state + its JSON shape
 //	jsutil.go      generic Go <-> js.Value plumbing (no protocol logic)

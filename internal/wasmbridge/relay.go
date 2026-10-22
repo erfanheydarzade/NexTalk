@@ -13,7 +13,7 @@
 //
 // Framing is likewise shared, not reinvented: SendEnvelope/WrapEnvelope/
 // PeerIDToEd25519Pub now live in internal/relay (promoted out of the
-// formerly cmd/worker-private envolpe.go — see that file's comments), and
+// formerly cmd/worker-private envelope.go — see that file's comments), and
 // UnwrapEnvelope stays exported on the worker package where it always was.
 // That is what "standard functions and parameters, same as the worker
 // part" means concretely: cmd/worker and this package both call
