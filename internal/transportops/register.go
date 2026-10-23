@@ -176,9 +176,32 @@ func IdentityRegister(d *Deps, transportID, identity, router string) (*IdentityR
 		return out, nil
 	}
 
-	mailbox, err := hex.DecodeString(mailboxIDDisplay)
-	if err != nil || len(mailbox) != 16 {
-		return nil, fmt.Errorf("router returned malformed mailbox_id for %s", transportID)
+	var mailbox []byte
+	if transportID == "filerelay" {
+		// FileRelay already returns a 16-byte mailbox ID.
+		mailbox, err = hex.DecodeString(mailboxIDDisplay)
+		if err != nil || len(mailbox) != 16 {
+			return nil, fmt.Errorf("router returned malformed mailbox_id for %s", transportID)
+		}
+	} else {
+		// Worker Relay mailbox IDs are 32 bytes (HMAC-SHA256) but the
+		// transport boundary only carries 16-byte aliases. Ask the bridge to
+		// resolve our own pubkey: it records alias -> full-ID in its
+		// mailbox-map and hands back the alias that attach/poll expect.
+		xr, ok := tr.(interface {
+			XferResolve(ctx context.Context, recipientPub []byte, routerURL string) ([]byte, string, error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("transport %s cannot map the router mailbox to an alias (no resolve support)", transportID)
+		}
+		alias, _, rerr := xr.XferResolve(ctx, cl.IdentityPublic, router)
+		if rerr != nil {
+			return nil, fmt.Errorf("registered, but resolving own mailbox alias failed: %w", rerr)
+		}
+		if len(alias) != 16 {
+			return nil, fmt.Errorf("bridge returned a %d-byte alias for %s (want 16)", len(alias), transportID)
+		}
+		mailbox = alias
 	}
 	out.Alias = hex.EncodeToString(mailbox)
 
