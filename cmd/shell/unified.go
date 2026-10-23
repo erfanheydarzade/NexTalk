@@ -278,7 +278,7 @@ func printWelcomeHints(session *shellcmd.Session) {
 	fmt.Println()
 	fmt.Println("   " + ui.Num.Sprint("1.") + " " + ui.CodeSpan("`identity init` → create who you are (or `identity load <id>`)"))
 	fmt.Println("   " + ui.Num.Sprint("2.") + " " + ui.CodeSpan("`use relay <id>` → pick where messages travel (`transport list`)"))
-	fmt.Println("   " + ui.Num.Sprint("3.") + " " + ui.CodeSpan("`peer connect <peer>` → handshake, then `message send <peer> hi`"))
+	fmt.Println("   " + ui.Num.Sprint("3.") + " " + ui.CodeSpan("`transport register-identity --router <url>` (once), then `peer connect <peer>` → handshake, `message send <peer> hi`"))
 	fmt.Println("  " + ui.Comment.Sprint("New here? run ") + ui.Code.Sprint("quickstart") +
 		ui.Comment.Sprint(" for the full 5-step tour · lost? run ") + ui.Code.Sprint("help") + ui.Comment.Sprint("."))
 	fmt.Println()
