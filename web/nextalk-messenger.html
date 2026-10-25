@@ -6,7 +6,7 @@
 <title>NexTalk</title>
 <meta name="referrer" content="no-referrer" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23111%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-size=%2716%27 font-family=%27sans-serif%27 font-weight=%27700%27 text-anchor=%27middle%27 fill=%27%23fff%27%3ENT%3C/text%3E%3C/svg%3E" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-yxsqcvoObrQYPE/cWkuspiTrjxeINCS+PJaHctWG0UM=' 'sha256-c6Ocbkmg/uRN4Ev4VzlLHkEew4gTi64Rh8vYehjdwyU=' 'sha256-bk14nPQ1m8V6Upmaadr2t8fqHjzLQ6w6sH5ObaFF2vI=' 'sha256-k3eVss6I0cjMkgdt2H4GV5xJtxYADiKoxQIOoKJtv9c=' 'sha256-C9wk7dQW/z6EqBORgsHrrIbsTt92aq0txW3XwbMucVI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'; object-src 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'sha256-yxsqcvoObrQYPE/cWkuspiTrjxeINCS+PJaHctWG0UM=' 'sha256-Ttfjhkwi/z8GBPNXUWnAAo0ZKbOcwaeKii3Jm2X9XCk=' 'sha256-bk14nPQ1m8V6Upmaadr2t8fqHjzLQ6w6sH5ObaFF2vI=' 'sha256-k3eVss6I0cjMkgdt2H4GV5xJtxYADiKoxQIOoKJtv9c=' 'sha256-C9wk7dQW/z6EqBORgsHrrIbsTt92aq0txW3XwbMucVI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'; object-src 'none'" />
 <meta name="theme-color" content="#e6e9ef" />
 <script>(function(){var K="nextalk_ui_v1",D={mode:"auto",accent:175,style:"soft",depth:1,radius:16,density:"comfy",fs:14,motion:true},S=Object.assign({},D);try{Object.assign(S,JSON.parse(localStorage.getItem(K)||"{}"))}catch(e){}
 var r=document.documentElement,mq=matchMedia("(prefers-color-scheme: dark)");
@@ -1272,7 +1272,7 @@ textarea[readonly]{min-height:120px;font-size:12px}#mSub.mono{white-space:pre-wr
     let ver = "—"; try{ if (g && typeof NexTalk.version === "function") ver = safeStringify(NexTalk.version()); }catch(e){}
     document.getElementById("dbgVersion").textContent = ver;
     if (g && NexTalk.context) document.getElementById("dbgSendMulti").textContent = probeSendMulti() ? "yes (async)" : "NO — group sends blocked";
-    try{ const v = g && NexTalk.version && NexTalk.version(); if (v && v.api && v.api !== "2") log("warn", "[bridge] page written for wasm bridge api 2, this build reports api " + v.api); }catch(e){}
+    try{ const v = g && NexTalk.version && NexTalk.version(); if (v && v.api && v.api !== "3") log("warn", "[bridge] page written for wasm bridge api 3, this build reports api " + v.api); }catch(e){}
   }
 
   window.ntApp = { handle: handleListenEvent, push: pushMessage, persist: PERSIST, state, syncSessions, myFp, fpOf, reconnectPeer, schedulePoll, setPeers: o => { state.peers = (o && typeof o === "object") ? o : {}; renderPeerList(); renderChatHeader(); }, init: safe(doInit), restore: importIdentityText };

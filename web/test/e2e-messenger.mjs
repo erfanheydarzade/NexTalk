@@ -70,6 +70,7 @@ await boot();
 ok(await pg.evaluate(() => !document.querySelector('script[src*="tailwind"], link[href*="googleapis"]')), 'no third-party script/font tags');
 ok((await pg.evaluate(() => window.__csp || [])).length === 0, 'no CSP violations while loading');
 ok(errs.length === 0, 'no console/page errors on load ' + JSON.stringify(errs.slice(0, 2)));
+ok(await pg.evaluate(() => NexTalk.version().api === '3' && !document.getElementById('log').textContent.includes('page written for wasm bridge api')), 'messenger matches JS API revision 3 without compatibility warnings');
 
 // ---- identity + extension host ------------------------------------------
 await pg.evaluate(() => window.ntApp.init());

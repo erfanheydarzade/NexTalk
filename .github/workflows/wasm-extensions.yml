@@ -12,6 +12,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "**/*.go"
       - "example-transports/**"
       - "web/**"
       - "cmd/nextalk-wasm/**"
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/wasm-extensions.yml"
   pull_request:
     paths:
+      - "**/*.go"
       - "example-transports/**"
       - "web/**"
       - "cmd/nextalk-wasm/**"
