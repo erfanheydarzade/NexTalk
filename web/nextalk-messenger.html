@@ -1272,7 +1272,7 @@ textarea[readonly]{min-height:120px;font-size:12px}#mSub.mono{white-space:pre-wr
     let ver = "—"; try{ if (g && typeof NexTalk.version === "function") ver = safeStringify(NexTalk.version()); }catch(e){}
     document.getElementById("dbgVersion").textContent = ver;
     if (g && NexTalk.context) document.getElementById("dbgSendMulti").textContent = probeSendMulti() ? "yes (async)" : "NO — group sends blocked";
-    try{ const v = g && NexTalk.version && NexTalk.version(); if (v && v.api && v.api !== "2") log("warn", "[bridge] page written for wasm bridge api 2, this build reports api " + v.api); }catch(e){}
+    try{ const v = g && NexTalk.version && NexTalk.version(); if (v && v.api && v.api !== "3") log("warn", "[bridge] page written for wasm bridge api 3, this build reports api " + v.api); }catch(e){}
   }
 
   window.ntApp = { handle: handleListenEvent, push: pushMessage, persist: PERSIST, state, syncSessions, myFp, fpOf, reconnectPeer, schedulePoll, setPeers: o => { state.peers = (o && typeof o === "object") ? o : {}; renderPeerList(); renderChatHeader(); }, init: safe(doInit), restore: importIdentityText };

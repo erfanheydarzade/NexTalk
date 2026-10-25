@@ -36,9 +36,9 @@ node transport-smoke.mjs                 # two identities, message through the W
 ## 5. Browser end-to-end test (headless Chromium)
 ```bash
 cd web/test && npm install && npx playwright install chromium
-node e2e-messenger.mjs                   # expect: "24 passed, 0 failed"
+node e2e-messenger.mjs                   # expect: "25 passed, 0 failed"
 ```
-It checks: no third-party tags, CSP enforcement, extension install + host registration,
+It checks: API revision 3 compatibility, no third-party tags, CSP enforcement, extension install + host registration,
 encrypted vault (600k PBKDF2) incl. wrong-password rejection and restore after reload,
 no plaintext chat/extension state in localStorage, markup injection, http:// relay refusal,
 and the auto-poll schedule (4s, back-off after failure, stops when Auto-check is off).

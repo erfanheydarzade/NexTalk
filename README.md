@@ -13,7 +13,7 @@ NexTalk is **not** a chat application. It is a research-grade **cryptographic ex
 
 ## What NexTalk Actually Does
 
-NexTalk establishes a secure, forward-secret session between two peers using a hybrid classical + post-quantum key exchange, then exchanges encrypted messages over one of several pluggable transport backends (Cloudflare Workers KV, S3-compatible object storage, or fully offline copy-paste).
+NexTalk establishes a secure, forward-secret session between two peers using a hybrid classical + post-quantum key exchange, then exchanges encrypted messages over pluggable transports. The core includes offline mode and the built-in Worker relay; installable `.ntx` transports are maintained in [NexTalk-Relay](https://github.com/erfanheydarzade/NexTalk-Relay) and [NexTalk-FileRelay](https://github.com/erfanheydarzade/NexTalk-FileRelay). The `example-transports/` package is a reference/test transport, not either service.
 
 ---
 
@@ -26,7 +26,7 @@ cmd/
   nextalk-wasm/     → WebAssembly build target (main.go + build.sh/build.bat)
   offline/          → Cobra subcommands: init, offer, accept, finish, encrypt, decrypt, run
   worker/           → Worker transport subcommand + registration
-  proxy/            → Proxy transport subcommand + registration
+  proxy/            → Legacy Proxy transport command + registration
   shell/              → shell launcher
   transports/       → Transport auto-registration via side-effect imports
   
@@ -34,7 +34,7 @@ core/               → Protocol engine: handshake orchestration, session manage
 crypto/             → Cryptographic primitives: keys, ratchet, AEAD, HKDF
 client/             → Peer identity state + persistent session storage (<id>.json; see docs/serialization.md for why)
 
-transport/          → Raw relay adapters: Cloudflare KV (worker.go), S3 (proxy.go)
+transport/          → Built-in Worker and legacy Proxy HTTP adapters
 
 internal/
   codec/            → Input/output encoding helpers (raw, b64, hex)
@@ -43,11 +43,16 @@ internal/
   registry/         → Transport registry
   relay/            → Transport adapter interfaces
     worker/         → Cloudflare Worker adapter
-    proxy/          → S3/proxy adapter
-  session/          → Session state helpers
+    proxy/          → Legacy adapter; not compatible with current relay.Relay
+  mailbox/          → Persistent mailbox storage and legacy-store migration
+  multimsg/         → Message contexts, fan-out, and recipient policies
+  filetransfer/     → Encrypted file-transfer manifests, tickets, and chunks
+  transport/        → External `.ntx` installer, runtime, RPC, and WASM support
+  transportops/     → Shared command handlers for CLI and shell
+  ntxhost/          → Host operations for WebAssembly transports
   wasmbridge/       → JS <-> Go bridge powering the browser build (one file per concern)
 
-web/                → Browser demo (index.html) that loads the wasm bundle
+web/                → Browser demo and messenger (`index.html`, `nextalk-messenger.html`)
 ```
 
 Each layer has a well-defined trust boundary:
@@ -181,15 +186,19 @@ the wire.
   built by `relay.WrapEnvelope` / read back by `relay.worker.UnwrapEnvelope`,
   and shared by the CLI's `worker` transport and the wasm bridge.
 
-- **Proxy transport** — JSON with a numeric `type` (1/2/3) and `data` as a
+- **Legacy Proxy adapter** — JSON with a numeric `type` (1/2/3) and `data` as a
   real embedded JSON object:
   ```json
   { "type": 1, "data": { ... } }
   ```
-  (`internal/relay/proxy/adapter.go`)
+  (`internal/relay/proxy/adapter.go`). This adapter is retained for legacy use,
+  but it does not currently satisfy the common `relay.Relay` interface. The
+  installable `.ntx` transport system is the supported path for adding new
+  backends; see [`docs/transport-runtime.md`](docs/transport-runtime.md).
 
-In every case the transport layer only routes opaque bytes — it never
-inspects the decoded offer/answer/message payload itself.
+The built-in Worker adapter and external `.ntx` transports relay opaque
+protocol frames. The legacy Proxy adapter decodes its JSON payloads, so this
+opaque-frame description does not apply to that legacy path.
 
 ### Message frame (nanopack)
 
